@@ -3,17 +3,18 @@
 //! Expression parsing uses Pratt-style binding powers so operator precedence
 //! and left-associativity are unambiguous: `1 + 2 * 3` parses as `1 + (2 * 3)`,
 //! and grouping with parentheses overrides that shape. The parser also handles
-//! `let` / `return` / expression statements and `fn` declarations.
+//! `let` / `return` / expression statements and `fn` declarations, including the
+//! `uses {...}` effect set and the `requires` / `ensures` contract clauses that
+//! declare Writ's two pillars.
 //!
-//! The `uses {...}` / `requires` / `ensures` signature clauses are added in
-//! later work, as is error recovery past the first error; here a parse error
+//! Error recovery past the first error is a later milestone; here a parse error
 //! produces one structured [`Diagnostic`] and stops.
 
 use writ_ast::{
     BinaryOp, Block, Expr, Function, Item, Literal, LiteralKind, Module, Param, Signature, Span,
     Stmt, TypeExpr, UnaryOp,
 };
-use writ_ast::{Diagnostic, EffectSet};
+use writ_ast::{Contract, Diagnostic, Effect, EffectSet};
 use writ_lexer::{Keyword, Token, TokenKind};
 
 /// The result of parsing a source string: the (possibly partial) module and any
@@ -179,6 +180,25 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Signature clauses declare the two pillars: `uses {...}` for authority
+        // and `requires` / `ensures` for correctness. They sit between the
+        // return type and the body, in any order, and requires/ensures repeat.
+        let mut effects = EffectSet::default();
+        let mut requires = Vec::new();
+        let mut ensures = Vec::new();
+        loop {
+            match self.peek() {
+                TokenKind::Keyword(Keyword::Uses) => self.parse_uses(&mut effects)?,
+                TokenKind::Keyword(Keyword::Requires) => {
+                    requires.push(self.parse_contract()?);
+                }
+                TokenKind::Keyword(Keyword::Ensures) => {
+                    ensures.push(self.parse_contract()?);
+                }
+                _ => break,
+            }
+        }
+
         // The signature spans `fn` through the last token before the body.
         let sig_end = self.tokens[self.pos.saturating_sub(1)].span;
         let body = self.parse_block()?;
@@ -187,9 +207,9 @@ impl<'a> Parser<'a> {
             name,
             params,
             return_type,
-            effects: EffectSet::default(),
-            requires: Vec::new(),
-            ensures: Vec::new(),
+            effects,
+            requires,
+            ensures,
             span: start.merge(&sig_end),
         };
         Ok(Function {
@@ -197,6 +217,37 @@ impl<'a> Parser<'a> {
             body,
             span,
         })
+    }
+
+    /// Parse a `uses { E1, E2, ... }` effect set, extending `effects`. Repeated
+    /// `uses` clauses accumulate rather than conflict.
+    fn parse_uses(&mut self, effects: &mut EffectSet) -> Result<(), Diagnostic> {
+        let kw = self.advance().span; // `uses`
+        self.expect(&TokenKind::LBrace, "`{` to open the `uses` effect set")?;
+        while self.peek() != &TokenKind::RBrace && !self.at_end() {
+            let (name, span) = self.expect_ident_spanned("an effect name")?;
+            effects.effects.push(Effect { name, span });
+            if self.peek() == &TokenKind::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RBrace, "`}` to close the `uses` effect set")?;
+        effects.span = Some(match effects.span {
+            Some(prev) => prev.merge(&kw).merge(&close),
+            None => kw.merge(&close),
+        });
+        Ok(())
+    }
+
+    /// Parse a `requires` or `ensures` clause: the keyword followed by a boolean
+    /// predicate expression.
+    fn parse_contract(&mut self) -> Result<Contract, Diagnostic> {
+        let kw = self.advance().span; // `requires` / `ensures`
+        let predicate = self.expression()?;
+        let span = kw.merge(&predicate.span());
+        Ok(Contract { predicate, span })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, Diagnostic> {
@@ -605,6 +656,98 @@ fn add(a: Int, b: Int) -> Int {
         assert_eq!(ty.name, "Cap");
         assert_eq!(ty.args.len(), 1);
         assert_eq!(ty.args[0].name, "Write");
+    }
+
+    #[test]
+    fn parses_uses_requires_ensures_into_signature() {
+        let source = "\
+fn write_line(out: Cap<Write>, msg: Text) -> Int
+    uses { Write }
+    requires len(msg) > 0
+    ensures true
+{
+    return 0;
+}
+";
+        let result = parse(source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0];
+        let sig = &f.signature;
+        assert_eq!(sig.effects.effects.len(), 1);
+        assert_eq!(sig.effects.effects[0].name, "Write");
+        assert_eq!(sig.requires.len(), 1);
+        assert!(matches!(
+            sig.requires[0].predicate,
+            Expr::Binary {
+                op: BinaryOp::Gt,
+                ..
+            }
+        ));
+        assert_eq!(sig.ensures.len(), 1);
+        assert!(matches!(
+            sig.ensures[0].predicate,
+            Expr::Literal(Literal {
+                kind: LiteralKind::Bool(true),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn multiple_effects_and_repeated_contracts() {
+        let source = "\
+fn f(a: Int)
+    uses { Write, Net }
+    requires a > 0
+    requires a < 100
+    ensures true
+    ensures false
+{ return; }
+";
+        let result = parse(source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0];
+        assert_eq!(f.signature.effects.effects.len(), 2);
+        assert_eq!(f.signature.requires.len(), 2);
+        assert_eq!(f.signature.ensures.len(), 2);
+    }
+
+    #[test]
+    fn empty_uses_set_is_allowed() {
+        let result = parse("fn f() uses {} { return; }");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0];
+        assert!(f.signature.effects.effects.is_empty());
+        assert!(f.signature.effects.span.is_some());
+    }
+
+    // --- Negative tests: malformed clauses are refused with a diagnostic.
+
+    #[test]
+    fn uses_without_braces_is_refused() {
+        let result = parse("fn f() uses Write { return; }");
+        assert!(!result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics[0].code, "P0001");
+    }
+
+    #[test]
+    fn requires_without_predicate_is_refused() {
+        // `requires` immediately followed by the body brace: no predicate.
+        let result = parse("fn f() requires { return; }");
+        assert!(!result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics[0].code, "P0002");
     }
 
     // --- Negative tests: malformed input is refused with a diagnostic.
