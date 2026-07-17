@@ -1,0 +1,7 @@
+# Formatting is a check, not a preference: the compiler is the trust anchor for
+# a language whose whole point is machine-checkable correctness, so its source
+# is formatted deterministically. These values match rustfmt's stable defaults
+# and are pinned here so the `cargo fmt --check` gate is explicit and stable.
+edition = "2021"
+max_width = 100
+newline_style = "Unix"

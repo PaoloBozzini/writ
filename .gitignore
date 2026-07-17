@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Backtrace / debug output
+rust-toolchain-*.tar.gz
+
+# Local editor / agent tooling (not part of the project)
+/.claude/
