@@ -2,19 +2,24 @@
 //!
 //! A back end, not the source of truth: it evaluates the AST that `writ-parser`
 //! produces and never performs static analysis. It also never panics on a bad
-//! program — every arithmetic overflow, division by zero, or type mismatch
-//! becomes a [`RuntimeError`] anchored to a span.
+//! program — every arithmetic overflow, division by zero, type mismatch, or bad
+//! call becomes a [`RuntimeError`] anchored to a span.
 //!
-//! It evaluates the core expression forms (literals and the arithmetic,
-//! comparison, and logical operators), `let` bindings with lexical scope, and
-//! blocks with `return`. Because it walks the tree the parser built, operator
-//! precedence is already baked into the shape, so `1 + 2 * 3` evaluates to `7`.
-//! Function calls arrive in later work.
+//! It evaluates the core expression forms, `let` bindings with lexical scope,
+//! blocks with `return`, `if`/`else`, and user-defined function calls (nested
+//! and recursive). Function calls are the sole channel through which values —
+//! and, later, capabilities — enter a callee's scope: an [`Interpreter`] holds
+//! an immutable table of the module's functions and binds arguments into a fresh
+//! call frame.
 
 mod env;
 mod value;
 
-use writ_ast::{BinaryOp, Block, Expr, Literal, LiteralKind, Stmt, UnaryOp};
+use std::collections::HashMap;
+
+use writ_ast::{
+    BinaryOp, Block, Expr, Function, Literal, LiteralKind, Module, Span, Stmt, UnaryOp,
+};
 
 pub use env::Env;
 pub use value::{RuntimeError, Value};
@@ -26,118 +31,270 @@ enum Control {
     Return(Value),
 }
 
-/// Evaluate a core expression to a [`Value`] in an empty environment.
+/// Evaluate a single core expression in an empty environment (no functions in
+/// scope).
 ///
 /// # Errors
 /// Returns a [`RuntimeError`] on overflow, division by zero, a type mismatch, an
-/// unbound variable, or a call (calls arrive in later work).
+/// unbound variable, or a call to an unknown function.
 pub fn eval_expr(expr: &Expr) -> Result<Value, RuntimeError> {
-    let mut env = Env::new();
-    eval_expr_in(expr, &mut env)
+    Interpreter::empty().eval_expr_in(expr, &mut Env::new())
 }
 
-/// Evaluate a block of statements in a fresh environment, returning the block's
-/// value (the value of a `return`, else `Unit`).
+/// Evaluate a block of statements in a fresh environment with no functions in
+/// scope, returning the block's value (the value of a `return`, else `Unit`).
 ///
 /// # Errors
 /// Returns a [`RuntimeError`] on any evaluation failure inside the block.
 pub fn eval_block(block: &Block) -> Result<Value, RuntimeError> {
-    let mut env = Env::new();
-    eval_block_in(block, &mut env)
+    Interpreter::empty().eval_block_in(block, &mut Env::new())
 }
 
-/// Evaluate a block in the given environment, opening a nested lexical scope for
-/// the duration so its bindings do not leak to the caller.
-fn eval_block_in(block: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
-    env.push_scope();
-    let result = run_stmts(&block.stmts, env);
-    env.pop_scope();
-    match result? {
-        Control::Normal(v) | Control::Return(v) => Ok(v),
+/// Build an interpreter for `module` and call its `entry` function with `args`.
+///
+/// # Errors
+/// Returns a [`RuntimeError`] if the module has duplicate function names, the
+/// entry function is unknown, or evaluation fails.
+pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Interpreter::new(module)?.call(entry, args)
+}
+
+/// A tree-walking interpreter over a module's functions.
+///
+/// The function table is an immutable `name -> &Function` map — a read-only
+/// registry, not global mutable state — so evaluation stays locally reasoned:
+/// authority and values flow only through explicit call arguments.
+pub struct Interpreter<'m> {
+    funcs: HashMap<&'m str, &'m Function>,
+}
+
+impl<'m> Interpreter<'m> {
+    /// Build an interpreter from a module, indexing its functions by name.
+    ///
+    /// # Errors
+    /// Returns a [`RuntimeError`] if two functions share a name — an ambiguous
+    /// program the interpreter refuses rather than silently resolving.
+    pub fn new(module: &'m Module) -> Result<Self, RuntimeError> {
+        let mut funcs = HashMap::new();
+        for item in &module.items {
+            let writ_ast::Item::Function(f) = item;
+            if funcs.insert(f.signature.name.as_str(), f).is_some() {
+                return Err(RuntimeError::new(
+                    f.signature.span,
+                    format!("function `{}` is defined more than once", f.signature.name),
+                ));
+            }
+        }
+        Ok(Self { funcs })
     }
-}
 
-/// Run a sequence of statements, stopping early on a `return`.
-fn run_stmts(stmts: &[Stmt], env: &mut Env) -> Result<Control, RuntimeError> {
-    let mut last = Value::Unit;
-    for stmt in stmts {
-        match eval_stmt(stmt, env)? {
-            Control::Normal(v) => last = v,
-            ret @ Control::Return(_) => return Ok(ret),
+    /// An interpreter with no functions in scope.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            funcs: HashMap::new(),
         }
     }
-    Ok(Control::Normal(last))
-}
 
-fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Control, RuntimeError> {
-    match stmt {
-        Stmt::Let {
-            name,
-            mutable,
-            value,
-            span,
-            ..
-        } => {
-            let v = eval_expr_in(value, env)?;
-            env.define(name, v, *mutable)
-                .map_err(|msg| RuntimeError::new(*span, msg))?;
-            Ok(Control::Normal(Value::Unit))
+    /// Call a function by name with already-evaluated arguments.
+    ///
+    /// # Errors
+    /// Returns a [`RuntimeError`] if the function is unknown or evaluation fails.
+    pub fn call(&self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        // No span is available from the public entry point; use an empty one.
+        self.call_by_name(name, args, Span::new(0, 0))
+    }
+
+    fn call_by_name(
+        &self,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let func = self
+            .funcs
+            .get(name)
+            .copied()
+            .ok_or_else(|| RuntimeError::new(span, format!("unknown function `{name}`")))?;
+        self.call_function(func, args, span)
+    }
+
+    fn call_function(
+        &self,
+        func: &Function,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let params = &func.signature.params;
+        if args.len() != params.len() {
+            return Err(RuntimeError::new(
+                span,
+                format!(
+                    "function `{}` expects {} argument(s), got {}",
+                    func.signature.name,
+                    params.len(),
+                    args.len()
+                ),
+            ));
         }
-        Stmt::Expr(expr) => Ok(Control::Normal(eval_expr_in(expr, env)?)),
-        Stmt::Return { value, .. } => {
-            let v = match value {
-                Some(expr) => eval_expr_in(expr, env)?,
-                None => Value::Unit,
-            };
-            Ok(Control::Return(v))
+        // A fresh call frame: arguments are the only things in scope besides the
+        // module's functions.
+        let mut env = Env::new();
+        for (param, value) in params.iter().zip(args) {
+            env.define(&param.name, value, false)
+                .map_err(|m| RuntimeError::new(param.span, m))?;
         }
-        Stmt::If {
-            cond,
-            then_block,
-            else_block,
-            ..
-        } => {
-            if eval_bool(cond, env)? {
-                run_block_stmts(then_block, env)
-            } else if let Some(else_block) = else_block {
-                run_block_stmts(else_block, env)
-            } else {
+        self.eval_block_in(&func.body, &mut env)
+    }
+
+    /// Evaluate a block, opening a nested lexical scope so its bindings do not
+    /// leak to the caller. A `return` becomes the block's value.
+    fn eval_block_in(&self, block: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
+        match self.run_block_stmts(block, env)? {
+            Control::Normal(v) | Control::Return(v) => Ok(v),
+        }
+    }
+
+    /// Run a block's statements in a nested scope, propagating a `return` outward
+    /// as control flow rather than swallowing it into the block's value.
+    fn run_block_stmts(&self, block: &Block, env: &mut Env) -> Result<Control, RuntimeError> {
+        env.push_scope();
+        let result = self.run_stmts(&block.stmts, env);
+        env.pop_scope();
+        result
+    }
+
+    /// Run a sequence of statements, stopping early on a `return`.
+    fn run_stmts(&self, stmts: &[Stmt], env: &mut Env) -> Result<Control, RuntimeError> {
+        let mut last = Value::Unit;
+        for stmt in stmts {
+            match self.eval_stmt(stmt, env)? {
+                Control::Normal(v) => last = v,
+                ret @ Control::Return(_) => return Ok(ret),
+            }
+        }
+        Ok(Control::Normal(last))
+    }
+
+    fn eval_stmt(&self, stmt: &Stmt, env: &mut Env) -> Result<Control, RuntimeError> {
+        match stmt {
+            Stmt::Let {
+                name,
+                mutable,
+                value,
+                span,
+                ..
+            } => {
+                let v = self.eval_expr_in(value, env)?;
+                env.define(name, v, *mutable)
+                    .map_err(|msg| RuntimeError::new(*span, msg))?;
                 Ok(Control::Normal(Value::Unit))
+            }
+            Stmt::Expr(expr) => Ok(Control::Normal(self.eval_expr_in(expr, env)?)),
+            Stmt::Return { value, .. } => {
+                let v = match value {
+                    Some(expr) => self.eval_expr_in(expr, env)?,
+                    None => Value::Unit,
+                };
+                Ok(Control::Return(v))
+            }
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                if self.eval_bool(cond, env)? {
+                    self.run_block_stmts(then_block, env)
+                } else if let Some(else_block) = else_block {
+                    self.run_block_stmts(else_block, env)
+                } else {
+                    Ok(Control::Normal(Value::Unit))
+                }
             }
         }
     }
-}
 
-/// Run a block's statements in a nested scope, propagating a `return` outward as
-/// control flow rather than swallowing it into the block's value.
-fn run_block_stmts(block: &Block, env: &mut Env) -> Result<Control, RuntimeError> {
-    env.push_scope();
-    let result = run_stmts(&block.stmts, env);
-    env.pop_scope();
-    result
-}
-
-/// Evaluate an expression in the given environment.
-fn eval_expr_in(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
-    match expr {
-        Expr::Literal(lit) => Ok(eval_literal(lit)),
-        Expr::Unary { op, operand, span } => {
-            let v = eval_expr_in(operand, env)?;
-            eval_unary(*op, v, *span)
+    /// Evaluate an expression in the given environment.
+    fn eval_expr_in(&self, expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
+        match expr {
+            Expr::Literal(lit) => Ok(eval_literal(lit)),
+            Expr::Unary { op, operand, span } => {
+                let v = self.eval_expr_in(operand, env)?;
+                eval_unary(*op, v, *span)
+            }
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => self.eval_binary(*op, left, right, *span, env),
+            Expr::Identifier { name, span } => env
+                .lookup(name)
+                .ok_or_else(|| RuntimeError::new(*span, format!("unbound variable `{name}`"))),
+            Expr::Call { callee, args, span } => {
+                let Expr::Identifier { name, .. } = callee.as_ref() else {
+                    return Err(RuntimeError::new(
+                        *span,
+                        "only named functions can be called",
+                    ));
+                };
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr_in(arg, env)?);
+                }
+                self.call_by_name(name, values, *span)
+            }
         }
-        Expr::Binary {
-            op,
-            left,
-            right,
-            span,
-        } => eval_binary(*op, left, right, *span, env),
-        Expr::Identifier { name, span } => env
-            .lookup(name)
-            .ok_or_else(|| RuntimeError::new(*span, format!("unbound variable `{name}`"))),
-        Expr::Call { span, .. } => Err(RuntimeError::new(
-            *span,
-            "function calls are not supported by the evaluator yet",
-        )),
+    }
+
+    fn eval_binary(
+        &self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        span: Span,
+        env: &mut Env,
+    ) -> Result<Value, RuntimeError> {
+        // Logical operators short-circuit, so evaluate the right side lazily.
+        match op {
+            BinaryOp::And => {
+                return match self.eval_bool(left, env)? {
+                    false => Ok(Value::Bool(false)),
+                    true => Ok(Value::Bool(self.eval_bool(right, env)?)),
+                };
+            }
+            BinaryOp::Or => {
+                return match self.eval_bool(left, env)? {
+                    true => Ok(Value::Bool(true)),
+                    false => Ok(Value::Bool(self.eval_bool(right, env)?)),
+                };
+            }
+            _ => {}
+        }
+
+        let l = self.eval_expr_in(left, env)?;
+        let r = self.eval_expr_in(right, env)?;
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                arithmetic(op, l, r, span)
+            }
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => compare(op, l, r, span),
+            BinaryOp::Eq => Ok(Value::Bool(equal(&l, &r, span)?)),
+            BinaryOp::Ne => Ok(Value::Bool(!equal(&l, &r, span)?)),
+            BinaryOp::And | BinaryOp::Or => unreachable!("handled above"),
+        }
+    }
+
+    /// Evaluate an expression that must be a `Bool`.
+    fn eval_bool(&self, expr: &Expr, env: &mut Env) -> Result<bool, RuntimeError> {
+        match self.eval_expr_in(expr, env)? {
+            Value::Bool(b) => Ok(b),
+            other => Err(RuntimeError::new(
+                expr.span(),
+                format!("expected a Bool, found {}", other.type_name()),
+            )),
+        }
     }
 }
 
@@ -149,7 +306,7 @@ fn eval_literal(lit: &Literal) -> Value {
     }
 }
 
-fn eval_unary(op: UnaryOp, v: Value, span: writ_ast::Span) -> Result<Value, RuntimeError> {
+fn eval_unary(op: UnaryOp, v: Value, span: Span) -> Result<Value, RuntimeError> {
     match (op, v) {
         (UnaryOp::Neg, Value::Int(n)) => n
             .checked_neg()
@@ -167,49 +324,7 @@ fn eval_unary(op: UnaryOp, v: Value, span: writ_ast::Span) -> Result<Value, Runt
     }
 }
 
-fn eval_binary(
-    op: BinaryOp,
-    left: &Expr,
-    right: &Expr,
-    span: writ_ast::Span,
-    env: &mut Env,
-) -> Result<Value, RuntimeError> {
-    // Logical operators short-circuit, so evaluate the right side lazily.
-    match op {
-        BinaryOp::And => {
-            return match eval_bool(left, env)? {
-                false => Ok(Value::Bool(false)),
-                true => Ok(Value::Bool(eval_bool(right, env)?)),
-            };
-        }
-        BinaryOp::Or => {
-            return match eval_bool(left, env)? {
-                true => Ok(Value::Bool(true)),
-                false => Ok(Value::Bool(eval_bool(right, env)?)),
-            };
-        }
-        _ => {}
-    }
-
-    let l = eval_expr_in(left, env)?;
-    let r = eval_expr_in(right, env)?;
-    match op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-            arithmetic(op, l, r, span)
-        }
-        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => compare(op, l, r, span),
-        BinaryOp::Eq => Ok(Value::Bool(equal(&l, &r, span)?)),
-        BinaryOp::Ne => Ok(Value::Bool(!equal(&l, &r, span)?)),
-        BinaryOp::And | BinaryOp::Or => unreachable!("handled above"),
-    }
-}
-
-fn arithmetic(
-    op: BinaryOp,
-    l: Value,
-    r: Value,
-    span: writ_ast::Span,
-) -> Result<Value, RuntimeError> {
+fn arithmetic(op: BinaryOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
     let (Value::Int(a), Value::Int(b)) = (&l, &r) else {
         return Err(RuntimeError::new(
             span,
@@ -244,7 +359,7 @@ fn arithmetic(
         .ok_or_else(|| RuntimeError::new(span, "integer overflow"))
 }
 
-fn compare(op: BinaryOp, l: Value, r: Value, span: writ_ast::Span) -> Result<Value, RuntimeError> {
+fn compare(op: BinaryOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
     let (Value::Int(a), Value::Int(b)) = (&l, &r) else {
         return Err(RuntimeError::new(
             span,
@@ -267,7 +382,7 @@ fn compare(op: BinaryOp, l: Value, r: Value, span: writ_ast::Span) -> Result<Val
 
 /// Structural equality within a single type. Comparing different types is a
 /// type error (no implicit coercion), reported rather than silently `false`.
-fn equal(l: &Value, r: &Value, span: writ_ast::Span) -> Result<bool, RuntimeError> {
+fn equal(l: &Value, r: &Value, span: Span) -> Result<bool, RuntimeError> {
     match (l, r) {
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
@@ -275,17 +390,6 @@ fn equal(l: &Value, r: &Value, span: writ_ast::Span) -> Result<bool, RuntimeErro
         _ => Err(RuntimeError::new(
             span,
             format!("cannot compare {} with {}", l.type_name(), r.type_name()),
-        )),
-    }
-}
-
-/// Evaluate an expression that must be a `Bool`.
-fn eval_bool(expr: &Expr, env: &mut Env) -> Result<bool, RuntimeError> {
-    match eval_expr_in(expr, env)? {
-        Value::Bool(b) => Ok(b),
-        other => Err(RuntimeError::new(
-            expr.span(),
-            format!("expected a Bool, found {}", other.type_name()),
         )),
     }
 }
@@ -313,6 +417,17 @@ mod tests {
         eval_block(&f.body)
     }
 
+    /// Parse a whole program and call `entry` with `args`.
+    fn run_program(src: &str, entry: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let result = writ_parser::parse(src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        run(&result.module, entry, args)
+    }
+
     #[test]
     fn evaluates_literals() {
         assert_eq!(eval("42").unwrap(), Value::Int(42));
@@ -322,11 +437,8 @@ mod tests {
 
     #[test]
     fn precedence_matches_the_parsed_tree() {
-        // Multiplication binds tighter than addition.
         assert_eq!(eval("1 + 2 * 3").unwrap(), Value::Int(7));
-        // Parentheses override it.
         assert_eq!(eval("(1 + 2) * 3").unwrap(), Value::Int(9));
-        // Left-associative subtraction.
         assert_eq!(eval("10 - 3 - 2").unwrap(), Value::Int(5));
     }
 
@@ -342,8 +454,6 @@ mod tests {
 
     #[test]
     fn logical_operators_short_circuit() {
-        // Right side is a type error, but `&&` must not evaluate it when the
-        // left is already false.
         assert_eq!(eval("false && (1 + 1)").unwrap(), Value::Bool(false));
         assert_eq!(eval("true || (1 + 1)").unwrap(), Value::Bool(true));
     }
@@ -434,5 +544,62 @@ mod tests {
     fn non_bool_condition_is_a_runtime_error() {
         let e = eval_body("if 1 { return 1; } return 0;").unwrap_err();
         assert!(e.message.contains("Bool"), "{}", e.message);
+    }
+
+    // --- functions and calls (#13) -----------------------------------------
+
+    #[test]
+    fn function_with_parameters_and_return() {
+        let src = "fn add(a: Int, b: Int) -> Int { return a + b; }";
+        assert_eq!(
+            run_program(src, "add", vec![Value::Int(3), Value::Int(4)]).unwrap(),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn nested_calls_propagate_return_values() {
+        let src = "\
+fn inc(x: Int) -> Int { return x + 1; }
+fn double(x: Int) -> Int { return x + x; }
+fn main() -> Int { return double(inc(4)); }
+";
+        assert_eq!(run_program(src, "main", vec![]).unwrap(), Value::Int(10));
+    }
+
+    #[test]
+    fn recursion_terminates_via_a_base_case() {
+        let src = "\
+fn fact(n: Int) -> Int {
+    if n <= 1 { return 1; }
+    return n * fact(n - 1);
+}
+";
+        assert_eq!(
+            run_program(src, "fact", vec![Value::Int(5)]).unwrap(),
+            Value::Int(120)
+        );
+    }
+
+    #[test]
+    fn wrong_argument_count_is_a_runtime_error() {
+        let src = "fn add(a: Int, b: Int) -> Int { return a + b; }";
+        let e = run_program(src, "add", vec![Value::Int(1)]).unwrap_err();
+        assert!(e.message.contains("expects 2"), "{}", e.message);
+    }
+
+    #[test]
+    fn unknown_function_is_a_runtime_error() {
+        let src = "fn main() -> Int { return nope(1); }";
+        let e = run_program(src, "main", vec![]).unwrap_err();
+        assert!(e.message.contains("unknown function"), "{}", e.message);
+    }
+
+    #[test]
+    fn duplicate_function_names_are_refused() {
+        let src = "fn f() -> Int { return 1; } fn f() -> Int { return 2; }";
+        let result = writ_parser::parse(src);
+        let e = run(&result.module, "f", vec![]).unwrap_err();
+        assert!(e.message.contains("more than once"), "{}", e.message);
     }
 }
