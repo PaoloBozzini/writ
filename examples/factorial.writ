@@ -1,0 +1,11 @@
+// Recursion, conditionals, and a built-in, end to end.
+fn fact(n: Int) -> Int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+fn main() {
+    print(fact(5));
+}
