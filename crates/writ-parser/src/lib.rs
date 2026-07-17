@@ -327,6 +327,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             TokenKind::Keyword(Keyword::Let) => self.parse_let(),
             TokenKind::Keyword(Keyword::Return) => self.parse_return(),
+            TokenKind::Keyword(Keyword::If) => self.parse_if(),
             _ => {
                 let expr = self.expression()?;
                 self.expect(&TokenKind::Semicolon, "`;` after the expression")?;
@@ -358,6 +359,43 @@ impl<'a> Parser<'a> {
             mutable,
             ty,
             value,
+            span: start.merge(&end),
+        })
+    }
+
+    fn parse_if(&mut self) -> Result<Stmt, Diagnostic> {
+        let start = self.advance().span; // `if`
+        let cond = self.expression()?;
+        let then_block = self.parse_block()?;
+        let (else_block, end) = if self.peek() == &TokenKind::Keyword(Keyword::Else) {
+            self.advance(); // `else`
+            if self.peek() == &TokenKind::Keyword(Keyword::If) {
+                // `else if`: parse the nested conditional and wrap it in a block
+                // so the AST stays a simple then/else pair.
+                let nested = self.parse_if()?;
+                let nspan = match &nested {
+                    Stmt::If { span, .. } => *span,
+                    _ => unreachable!("parse_if always yields Stmt::If"),
+                };
+                (
+                    Some(Block {
+                        stmts: vec![nested],
+                        span: nspan,
+                    }),
+                    nspan,
+                )
+            } else {
+                let blk = self.parse_block()?;
+                let s = blk.span;
+                (Some(blk), s)
+            }
+        } else {
+            (None, then_block.span)
+        };
+        Ok(Stmt::If {
+            cond,
+            then_block,
+            else_block,
             span: start.merge(&end),
         })
     }
@@ -786,6 +824,44 @@ fn f(a: Int)
         let result = parse("let x = 1;");
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(result.diagnostics[0].code, "P0002");
+    }
+
+    #[test]
+    fn parses_if_else_statement() {
+        let result = parse("fn f(n: Int) { if n < 0 { return 0; } else { return n; } }");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0];
+        match &f.body.stmts[0] {
+            Stmt::If { else_block, .. } => assert!(else_block.is_some()),
+            other => panic!("expected an if statement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_else_if_chain() {
+        let result = parse("fn f(n: Int) { if n == 1 { return 1; } else if n == 2 { return 2; } }");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0];
+        match &f.body.stmts[0] {
+            Stmt::If {
+                else_block: Some(b),
+                ..
+            } => {
+                assert!(
+                    matches!(b.stmts[0], Stmt::If { .. }),
+                    "else should nest an if"
+                );
+            }
+            other => panic!("expected an if with an else-if, got {other:?}"),
+        }
     }
 
     // --- Error recovery: parsing continues past the first error.

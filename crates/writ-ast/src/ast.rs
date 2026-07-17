@@ -117,6 +117,14 @@ pub enum Stmt {
     Expr(Expr),
     /// A `return`, optionally carrying a value.
     Return { value: Option<Expr>, span: Span },
+    /// A conditional. The `else` branch is optional and, when written as
+    /// `else if`, nests another `If` statement inside its block.
+    If {
+        cond: Expr,
+        then_block: Block,
+        else_block: Option<Block>,
+        span: Span,
+    },
 }
 
 /// A brace-delimited sequence of statements.

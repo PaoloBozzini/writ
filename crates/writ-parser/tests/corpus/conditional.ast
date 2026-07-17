@@ -1,0 +1,233 @@
+Module {
+    items: [
+        Function(
+            Function {
+                signature: Signature {
+                    name: "classify",
+                    params: [
+                        Param {
+                            name: "n",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 15,
+                                    end: 18,
+                                },
+                            },
+                            span: Span {
+                                start: 12,
+                                end: 18,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 23,
+                                end: 26,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 0,
+                        end: 26,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        If {
+                            cond: Binary {
+                                op: Lt,
+                                left: Identifier {
+                                    name: "n",
+                                    span: Span {
+                                        start: 36,
+                                        end: 37,
+                                    },
+                                },
+                                right: Literal(
+                                    Literal {
+                                        kind: Int(
+                                            0,
+                                        ),
+                                        span: Span {
+                                            start: 40,
+                                            end: 41,
+                                        },
+                                    },
+                                ),
+                                span: Span {
+                                    start: 36,
+                                    end: 41,
+                                },
+                            },
+                            then_block: Block {
+                                stmts: [
+                                    Return {
+                                        value: Some(
+                                            Binary {
+                                                op: Sub,
+                                                left: Literal(
+                                                    Literal {
+                                                        kind: Int(
+                                                            0,
+                                                        ),
+                                                        span: Span {
+                                                            start: 59,
+                                                            end: 60,
+                                                        },
+                                                    },
+                                                ),
+                                                right: Literal(
+                                                    Literal {
+                                                        kind: Int(
+                                                            1,
+                                                        ),
+                                                        span: Span {
+                                                            start: 63,
+                                                            end: 64,
+                                                        },
+                                                    },
+                                                ),
+                                                span: Span {
+                                                    start: 59,
+                                                    end: 64,
+                                                },
+                                            },
+                                        ),
+                                        span: Span {
+                                            start: 52,
+                                            end: 65,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    start: 42,
+                                    end: 71,
+                                },
+                            },
+                            else_block: Some(
+                                Block {
+                                    stmts: [
+                                        If {
+                                            cond: Binary {
+                                                op: Eq,
+                                                left: Identifier {
+                                                    name: "n",
+                                                    span: Span {
+                                                        start: 80,
+                                                        end: 81,
+                                                    },
+                                                },
+                                                right: Literal(
+                                                    Literal {
+                                                        kind: Int(
+                                                            0,
+                                                        ),
+                                                        span: Span {
+                                                            start: 85,
+                                                            end: 86,
+                                                        },
+                                                    },
+                                                ),
+                                                span: Span {
+                                                    start: 80,
+                                                    end: 86,
+                                                },
+                                            },
+                                            then_block: Block {
+                                                stmts: [
+                                                    Return {
+                                                        value: Some(
+                                                            Literal(
+                                                                Literal {
+                                                                    kind: Int(
+                                                                        0,
+                                                                    ),
+                                                                    span: Span {
+                                                                        start: 104,
+                                                                        end: 105,
+                                                                    },
+                                                                },
+                                                            ),
+                                                        ),
+                                                        span: Span {
+                                                            start: 97,
+                                                            end: 106,
+                                                        },
+                                                    },
+                                                ],
+                                                span: Span {
+                                                    start: 87,
+                                                    end: 112,
+                                                },
+                                            },
+                                            else_block: Some(
+                                                Block {
+                                                    stmts: [
+                                                        Return {
+                                                            value: Some(
+                                                                Literal(
+                                                                    Literal {
+                                                                        kind: Int(
+                                                                            1,
+                                                                        ),
+                                                                        span: Span {
+                                                                            start: 135,
+                                                                            end: 136,
+                                                                        },
+                                                                    },
+                                                                ),
+                                                            ),
+                                                            span: Span {
+                                                                start: 128,
+                                                                end: 137,
+                                                            },
+                                                        },
+                                                    ],
+                                                    span: Span {
+                                                        start: 118,
+                                                        end: 143,
+                                                    },
+                                                },
+                                            ),
+                                            span: Span {
+                                                start: 77,
+                                                end: 143,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        start: 77,
+                                        end: 143,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 33,
+                                end: 143,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 27,
+                        end: 145,
+                    },
+                },
+                span: Span {
+                    start: 0,
+                    end: 145,
+                },
+            },
+        ),
+    ],
+}
