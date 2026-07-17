@@ -15,11 +15,16 @@
 mod env;
 mod value;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use writ_ast::{
     BinaryOp, Block, Expr, Function, Literal, LiteralKind, Module, Span, Stmt, UnaryOp,
 };
+
+/// The name of the sole built-in for now. Kept tiny on purpose; the real stdlib
+/// (which threads capabilities through effectful built-ins) comes later.
+const PRINT: &str = "print";
 
 pub use env::Env;
 pub use value::{RuntimeError, Value};
@@ -66,6 +71,10 @@ pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, Runt
 /// authority and values flow only through explicit call arguments.
 pub struct Interpreter<'m> {
     funcs: HashMap<&'m str, &'m Function>,
+    /// Output collected from the `print` built-in, one entry per call. Held here
+    /// rather than written to ambient stdout so evaluation is deterministic and
+    /// testable — and so effects stay local to an interpreter instance.
+    output: RefCell<Vec<String>>,
 }
 
 impl<'m> Interpreter<'m> {
@@ -85,7 +94,10 @@ impl<'m> Interpreter<'m> {
                 ));
             }
         }
-        Ok(Self { funcs })
+        Ok(Self {
+            funcs,
+            output: RefCell::new(Vec::new()),
+        })
     }
 
     /// An interpreter with no functions in scope.
@@ -93,7 +105,27 @@ impl<'m> Interpreter<'m> {
     pub fn empty() -> Self {
         Self {
             funcs: HashMap::new(),
+            output: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The lines emitted by `print` so far, in order.
+    #[must_use]
+    pub fn output(&self) -> Vec<String> {
+        self.output.borrow().clone()
+    }
+
+    /// The `print` built-in: emit one line per call. Requires exactly one
+    /// argument.
+    fn builtin_print(&self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        let [value] = <[Value; 1]>::try_from(args).map_err(|args| {
+            RuntimeError::new(
+                span,
+                format!("`print` expects 1 argument, got {}", args.len()),
+            )
+        })?;
+        self.output.borrow_mut().push(value.to_string());
+        Ok(Value::Unit)
     }
 
     /// Call a function by name with already-evaluated arguments.
@@ -111,12 +143,17 @@ impl<'m> Interpreter<'m> {
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, RuntimeError> {
-        let func = self
-            .funcs
-            .get(name)
-            .copied()
-            .ok_or_else(|| RuntimeError::new(span, format!("unknown function `{name}`")))?;
-        self.call_function(func, args, span)
+        if let Some(func) = self.funcs.get(name).copied() {
+            return self.call_function(func, args, span);
+        }
+        // A user function of the same name would have shadowed it above.
+        if name == PRINT {
+            return self.builtin_print(args, span);
+        }
+        Err(RuntimeError::new(
+            span,
+            format!("unknown function `{name}`"),
+        ))
     }
 
     fn call_function(
@@ -601,5 +638,39 @@ fn fact(n: Int) -> Int {
         let result = writ_parser::parse(src);
         let e = run(&result.module, "f", vec![]).unwrap_err();
         assert!(e.message.contains("more than once"), "{}", e.message);
+    }
+
+    // --- stdlib: print (#15) -----------------------------------------------
+
+    #[test]
+    fn print_builtin_collects_output() {
+        let src = "\
+fn main() {
+    print(\"a\");
+    print(1 + 2);
+    print(true);
+}
+";
+        let result = writ_parser::parse(src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let interp = Interpreter::new(&result.module).unwrap();
+        interp.call("main", vec![]).unwrap();
+        assert_eq!(
+            interp.output(),
+            vec!["a".to_string(), "3".to_string(), "true".to_string()]
+        );
+    }
+
+    #[test]
+    fn print_with_wrong_arity_is_a_runtime_error() {
+        let src = "fn main() { print(1, 2); }";
+        let result = writ_parser::parse(src);
+        let interp = Interpreter::new(&result.module).unwrap();
+        let e = interp.call("main", vec![]).unwrap_err();
+        assert!(e.message.contains("`print` expects 1"), "{}", e.message);
     }
 }

@@ -1,0 +1,4 @@
+// The smallest Writ program: print a greeting.
+fn main() {
+    print("Hello, Writ!");
+}
