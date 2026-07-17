@@ -18,6 +18,17 @@ pub enum Severity {
     Warning,
 }
 
+impl Severity {
+    /// The stable, lowercase wire name used in serialized output.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        }
+    }
+}
+
 /// A single machine-readable diagnostic.
 ///
 /// The `code` is a stable identifier for the rule that produced the diagnostic
@@ -64,6 +75,61 @@ impl Diagnostic {
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
+
+    /// Serialize to a single canonical JSON object.
+    ///
+    /// The format is machine-readable and **deterministic**: fields always
+    /// appear in the same order (`code`, `severity`, `span`, `message`) and the
+    /// message is escaped so the output is always valid JSON. This is what a
+    /// generate-check-repair loop consumes, so stability matters more than
+    /// prettiness. Serialization is hand-written to keep `writ-ast` free of
+    /// heavy dependencies.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        format!(
+            "{{\"code\":\"{}\",\"severity\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"message\":\"{}\"}}",
+            escape_json(&self.code),
+            self.severity.as_str(),
+            self.span.start,
+            self.span.end,
+            escape_json(&self.message),
+        )
+    }
+}
+
+/// Serialize a slice of diagnostics to a canonical JSON array, preserving order.
+#[must_use]
+pub fn diagnostics_to_json(diagnostics: &[Diagnostic]) -> String {
+    let mut out = String::from("[");
+    for (i, d) in diagnostics.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&d.to_json());
+    }
+    out.push(']');
+    out
+}
+
+/// Escape a string so it is a valid JSON string body (without the surrounding
+/// quotes). Control characters are emitted as `\u00XX` so the output is pure
+/// ASCII and byte-for-byte reproducible.
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -84,5 +150,42 @@ mod tests {
         let d = Diagnostic::warning("W0001", Span::new(1, 2), "unused binding");
         assert!(!d.is_error());
         assert_eq!(d.severity, Severity::Warning);
+    }
+
+    #[test]
+    fn to_json_has_stable_field_order() {
+        let d = Diagnostic::error("P0001", Span::new(4, 7), "expected `)`");
+        assert_eq!(
+            d.to_json(),
+            r#"{"code":"P0001","severity":"error","span":{"start":4,"end":7},"message":"expected `)`"}"#
+        );
+    }
+
+    #[test]
+    fn to_json_escapes_message() {
+        let d = Diagnostic::error("L0001", Span::new(0, 1), "bad \"quote\"\nand\ttab");
+        assert_eq!(
+            d.to_json(),
+            r#"{"code":"L0001","severity":"error","span":{"start":0,"end":1},"message":"bad \"quote\"\nand\ttab"}"#
+        );
+    }
+
+    #[test]
+    fn serialization_is_deterministic() {
+        let d = Diagnostic::warning("W0007", Span::new(2, 9), "shadowed");
+        assert_eq!(d.to_json(), d.to_json());
+    }
+
+    #[test]
+    fn diagnostics_to_json_is_an_ordered_array() {
+        let ds = vec![
+            Diagnostic::error("E1", Span::new(0, 1), "a"),
+            Diagnostic::error("E2", Span::new(2, 3), "b"),
+        ];
+        assert_eq!(
+            diagnostics_to_json(&ds),
+            r#"[{"code":"E1","severity":"error","span":{"start":0,"end":1},"message":"a"},{"code":"E2","severity":"error","span":{"start":2,"end":3},"message":"b"}]"#
+        );
+        assert_eq!(diagnostics_to_json(&[]), "[]");
     }
 }

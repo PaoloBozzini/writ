@@ -7,8 +7,10 @@
 //! `uses {...}` effect set and the `requires` / `ensures` contract clauses that
 //! declare Writ's two pillars.
 //!
-//! Error recovery past the first error is a later milestone; here a parse error
-//! produces one structured [`Diagnostic`] and stops.
+//! On a parse error the parser records a structured [`Diagnostic`] and
+//! *recovers* to the next top-level item, so a single bad item does not hide
+//! the errors in the rest of the file. Diagnostics carry stable codes and exact
+//! spans and serialize deterministically (see `writ-ast`).
 
 use writ_ast::{
     BinaryOp, Block, Expr, Function, Item, Literal, LiteralKind, Module, Param, Signature, Span,
@@ -151,12 +153,27 @@ impl<'a> Parser<'a> {
             match self.parse_item() {
                 Ok(item) => items.push(item),
                 Err(d) => {
+                    // Record the error and recover to the next top-level item
+                    // rather than bailing, so one bad item doesn't hide the
+                    // errors in the rest of the file.
                     self.diagnostics.push(d);
-                    break; // No recovery yet; that is a later milestone.
+                    self.synchronize();
                 }
             }
         }
         Module { items }
+    }
+
+    /// Skip tokens until the start of the next top-level item (`fn`) or end of
+    /// input. Always advances at least once, so recovery cannot loop forever on
+    /// the token that triggered the error.
+    fn synchronize(&mut self) {
+        if !self.at_end() {
+            self.advance();
+        }
+        while !self.at_end() && self.peek() != &TokenKind::Keyword(Keyword::Fn) {
+            self.advance();
+        }
     }
 
     fn parse_item(&mut self) -> Result<Item, Diagnostic> {
@@ -769,5 +786,40 @@ fn f(a: Int)
         let result = parse("let x = 1;");
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(result.diagnostics[0].code, "P0002");
+    }
+
+    // --- Error recovery: parsing continues past the first error.
+
+    #[test]
+    fn recovery_reports_multiple_errors_in_one_pass() {
+        // Both functions have an invalid name (an integer literal). Without
+        // recovery only the first error would surface.
+        let result = parse("fn 1() {}\nfn 2() {}\n");
+        assert_eq!(
+            result.diagnostics.len(),
+            2,
+            "diags: {:?}",
+            result.diagnostics
+        );
+        assert!(result.diagnostics.iter().all(|d| d.code == "P0001"));
+    }
+
+    #[test]
+    fn recovery_still_parses_the_valid_item_after_a_broken_one() {
+        // First item is broken; the second is well-formed and must still parse.
+        let result = parse("fn 1() {}\nfn good() { return; }\n");
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.module.items.len(), 1);
+        let Item::Function(f) = &result.module.items[0];
+        assert_eq!(f.signature.name, "good");
+    }
+
+    #[test]
+    fn diagnostics_are_deterministic_across_runs() {
+        let src = "fn 1() {}\nfn 2() {}\n";
+        assert_eq!(
+            writ_ast::diagnostics_to_json(&parse(src).diagnostics),
+            writ_ast::diagnostics_to_json(&parse(src).diagnostics)
+        );
     }
 }
