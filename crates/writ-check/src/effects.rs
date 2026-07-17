@@ -26,7 +26,10 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
     let declared: HashMap<&str, Vec<&str>> = module
         .items
         .iter()
-        .map(|Item::Function(f)| {
+        .filter_map(|item| {
+            let Item::Function(f) = item else {
+                return None;
+            };
             let effects = f
                 .signature
                 .effects
@@ -34,12 +37,15 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
                 .iter()
                 .map(|e| e.name.as_str())
                 .collect();
-            (f.signature.name.as_str(), effects)
+            Some((f.signature.name.as_str(), effects))
         })
         .collect();
 
     let mut diagnostics = Vec::new();
-    for Item::Function(f) in &module.items {
+    for item in &module.items {
+        let Item::Function(f) = item else {
+            continue;
+        };
         let declared_here: HashSet<&str> = f
             .signature
             .effects
@@ -125,6 +131,14 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
         Expr::Binary { left, right, .. } => {
             collect_calls_in_expr(left, out);
             collect_calls_in_expr(right, out);
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            collect_calls_in_expr(scrutinee, out);
+            for arm in arms {
+                collect_calls_in_expr(&arm.body, out);
+            }
         }
         Expr::Literal(_) | Expr::Identifier { .. } => {}
     }

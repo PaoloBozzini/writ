@@ -16,6 +16,7 @@ pub enum Keyword {
     If,
     Else,
     Match,
+    Type,
     True,
     False,
 }
@@ -35,6 +36,7 @@ impl Keyword {
             "if" => Keyword::If,
             "else" => Keyword::Else,
             "match" => Keyword::Match,
+            "type" => Keyword::Type,
             "true" => Keyword::True,
             "false" => Keyword::False,
             _ => return None,
@@ -69,9 +71,13 @@ pub enum TokenKind {
     Eq,
     Bang,
     AmpAmp,
+    /// `|`, the sum-type variant separator.
+    Pipe,
     PipePipe,
     /// `->`, the return-type arrow.
     Arrow,
+    /// `=>`, the match-arm arrow.
+    FatArrow,
 
     // Punctuation.
     LParen,

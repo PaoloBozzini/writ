@@ -1,0 +1,244 @@
+Module {
+    items: [
+        Type(
+            TypeDecl {
+                name: "Option",
+                generics: [
+                    "T",
+                ],
+                variants: [
+                    Variant {
+                        name: "Some",
+                        fields: [
+                            TypeExpr {
+                                name: "T",
+                                args: [],
+                                span: Span {
+                                    start: 22,
+                                    end: 23,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            start: 17,
+                            end: 24,
+                        },
+                    },
+                    Variant {
+                        name: "None",
+                        fields: [],
+                        span: Span {
+                            start: 27,
+                            end: 31,
+                        },
+                    },
+                ],
+                span: Span {
+                    start: 0,
+                    end: 31,
+                },
+            },
+        ),
+        Type(
+            TypeDecl {
+                name: "Result",
+                generics: [
+                    "T",
+                    "E",
+                ],
+                variants: [
+                    Variant {
+                        name: "Ok",
+                        fields: [
+                            TypeExpr {
+                                name: "T",
+                                args: [],
+                                span: Span {
+                                    start: 56,
+                                    end: 57,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            start: 53,
+                            end: 58,
+                        },
+                    },
+                    Variant {
+                        name: "Err",
+                        fields: [
+                            TypeExpr {
+                                name: "E",
+                                args: [],
+                                span: Span {
+                                    start: 65,
+                                    end: 66,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            start: 61,
+                            end: 67,
+                        },
+                    },
+                ],
+                span: Span {
+                    start: 33,
+                    end: 67,
+                },
+            },
+        ),
+        Function(
+            Function {
+                signature: Signature {
+                    name: "unwrap_or",
+                    params: [
+                        Param {
+                            name: "o",
+                            ty: TypeExpr {
+                                name: "Option",
+                                args: [
+                                    TypeExpr {
+                                        name: "Int",
+                                        args: [],
+                                        span: Span {
+                                            start: 92,
+                                            end: 95,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    start: 85,
+                                    end: 96,
+                                },
+                            },
+                            span: Span {
+                                start: 82,
+                                end: 96,
+                            },
+                        },
+                        Param {
+                            name: "fallback",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 108,
+                                    end: 111,
+                                },
+                            },
+                            span: Span {
+                                start: 98,
+                                end: 111,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 116,
+                                end: 119,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 69,
+                        end: 119,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                Match {
+                                    scrutinee: Identifier {
+                                        name: "o",
+                                        span: Span {
+                                            start: 139,
+                                            end: 140,
+                                        },
+                                    },
+                                    arms: [
+                                        MatchArm {
+                                            pattern: Variant {
+                                                name: "Some",
+                                                args: [
+                                                    Ident {
+                                                        name: "x",
+                                                        span: Span {
+                                                            start: 156,
+                                                            end: 157,
+                                                        },
+                                                    },
+                                                ],
+                                                span: Span {
+                                                    start: 151,
+                                                    end: 158,
+                                                },
+                                            },
+                                            body: Identifier {
+                                                name: "x",
+                                                span: Span {
+                                                    start: 162,
+                                                    end: 163,
+                                                },
+                                            },
+                                            span: Span {
+                                                start: 151,
+                                                end: 163,
+                                            },
+                                        },
+                                        MatchArm {
+                                            pattern: Ident {
+                                                name: "None",
+                                                span: Span {
+                                                    start: 173,
+                                                    end: 177,
+                                                },
+                                            },
+                                            body: Identifier {
+                                                name: "fallback",
+                                                span: Span {
+                                                    start: 184,
+                                                    end: 192,
+                                                },
+                                            },
+                                            span: Span {
+                                                start: 173,
+                                                end: 192,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        start: 133,
+                                        end: 199,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 126,
+                                end: 200,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 120,
+                        end: 202,
+                    },
+                },
+                span: Span {
+                    start: 69,
+                    end: 202,
+                },
+            },
+        ),
+    ],
+}

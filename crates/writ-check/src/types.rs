@@ -24,7 +24,9 @@ const PRINT: &str = "print";
 pub fn check_types(module: &Module) -> Vec<Diagnostic> {
     let mut checker = Checker::new(module);
     for item in &module.items {
-        let Item::Function(f) = item;
+        let Item::Function(f) = item else {
+            continue;
+        };
         checker.check_function(&f.signature, &f.body);
     }
     checker.diagnostics
@@ -56,7 +58,9 @@ impl<'m> Checker<'m> {
     fn new(module: &'m Module) -> Self {
         let mut funcs = HashMap::new();
         for item in &module.items {
-            let Item::Function(f) = item;
+            let Item::Function(f) = item else {
+                continue;
+            };
             // A duplicate name is reported elsewhere; keep the first here.
             funcs
                 .entry(f.signature.name.as_str())
@@ -198,6 +202,9 @@ impl<'m> Checker<'m> {
                 self.check_binary(*op, &lt, &rt, *span)
             }
             Expr::Call { callee, args, span } => self.check_call(callee, args, *span),
+            // Type-checking of `match` (variant resolution + exhaustiveness) is
+            // handled by the sum-type checker pass; treat it as unknown here.
+            Expr::Match { .. } => Type::Error,
         }
     }
 
