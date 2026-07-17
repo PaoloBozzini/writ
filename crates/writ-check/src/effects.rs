@@ -51,6 +51,7 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
         let mut calls = Vec::new();
         collect_calls_in_block(&f.body, &mut calls);
 
+        let fn_name = f.signature.name.as_str();
         for call in calls {
             let Expr::Call { callee, span, .. } = call else {
                 continue;
@@ -63,11 +64,15 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
             };
             for effect in callee_effects {
                 if !declared_here.contains(effect) {
+                    // The honesty diagnostic names all three things a repair loop
+                    // needs: the effect, the effect site (this call, attributed to
+                    // the callee it flowed through), and the signature that
+                    // omitted it. A signature can never under-report its power.
                     diagnostics.push(Diagnostic::error(
                         "E0101",
                         *span,
                         format!(
-                            "effect `{effect}` is performed here but is not declared in this function's `uses {{...}}`"
+                            "function `{fn_name}` performs effect `{effect}` here (via call to `{name}`) but its signature's `uses {{...}}` set omits it"
                         ),
                     ));
                 }
