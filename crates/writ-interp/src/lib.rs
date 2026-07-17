@@ -5,27 +5,101 @@
 //! program — every arithmetic overflow, division by zero, or type mismatch
 //! becomes a [`RuntimeError`] anchored to a span.
 //!
-//! This first stage evaluates the core expression forms: literals and the
-//! arithmetic, comparison, and logical operators. Because it walks the tree the
-//! parser built, operator precedence is already baked into the shape, so
-//! `1 + 2 * 3` evaluates to `7`. Variables and calls arrive in later work.
+//! It evaluates the core expression forms (literals and the arithmetic,
+//! comparison, and logical operators), `let` bindings with lexical scope, and
+//! blocks with `return`. Because it walks the tree the parser built, operator
+//! precedence is already baked into the shape, so `1 + 2 * 3` evaluates to `7`.
+//! Function calls arrive in later work.
 
+mod env;
 mod value;
 
-use writ_ast::{BinaryOp, Expr, Literal, LiteralKind, UnaryOp};
+use writ_ast::{BinaryOp, Block, Expr, Literal, LiteralKind, Stmt, UnaryOp};
 
+pub use env::Env;
 pub use value::{RuntimeError, Value};
 
-/// Evaluate a core expression to a [`Value`].
+/// How evaluation of a statement flows: continue with a value, or return out of
+/// the enclosing block carrying a value.
+enum Control {
+    Normal(Value),
+    Return(Value),
+}
+
+/// Evaluate a core expression to a [`Value`] in an empty environment.
 ///
 /// # Errors
-/// Returns a [`RuntimeError`] on overflow, division by zero, a type mismatch, or
-/// an expression form not yet supported (variables and calls).
+/// Returns a [`RuntimeError`] on overflow, division by zero, a type mismatch, an
+/// unbound variable, or a call (calls arrive in later work).
 pub fn eval_expr(expr: &Expr) -> Result<Value, RuntimeError> {
+    let mut env = Env::new();
+    eval_expr_in(expr, &mut env)
+}
+
+/// Evaluate a block of statements in a fresh environment, returning the block's
+/// value (the value of a `return`, else `Unit`).
+///
+/// # Errors
+/// Returns a [`RuntimeError`] on any evaluation failure inside the block.
+pub fn eval_block(block: &Block) -> Result<Value, RuntimeError> {
+    let mut env = Env::new();
+    eval_block_in(block, &mut env)
+}
+
+/// Evaluate a block in the given environment, opening a nested lexical scope for
+/// the duration so its bindings do not leak to the caller.
+fn eval_block_in(block: &Block, env: &mut Env) -> Result<Value, RuntimeError> {
+    env.push_scope();
+    let result = run_stmts(&block.stmts, env);
+    env.pop_scope();
+    match result? {
+        Control::Normal(v) | Control::Return(v) => Ok(v),
+    }
+}
+
+/// Run a sequence of statements, stopping early on a `return`.
+fn run_stmts(stmts: &[Stmt], env: &mut Env) -> Result<Control, RuntimeError> {
+    let mut last = Value::Unit;
+    for stmt in stmts {
+        match eval_stmt(stmt, env)? {
+            Control::Normal(v) => last = v,
+            ret @ Control::Return(_) => return Ok(ret),
+        }
+    }
+    Ok(Control::Normal(last))
+}
+
+fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Control, RuntimeError> {
+    match stmt {
+        Stmt::Let {
+            name,
+            mutable,
+            value,
+            span,
+            ..
+        } => {
+            let v = eval_expr_in(value, env)?;
+            env.define(name, v, *mutable)
+                .map_err(|msg| RuntimeError::new(*span, msg))?;
+            Ok(Control::Normal(Value::Unit))
+        }
+        Stmt::Expr(expr) => Ok(Control::Normal(eval_expr_in(expr, env)?)),
+        Stmt::Return { value, .. } => {
+            let v = match value {
+                Some(expr) => eval_expr_in(expr, env)?,
+                None => Value::Unit,
+            };
+            Ok(Control::Return(v))
+        }
+    }
+}
+
+/// Evaluate an expression in the given environment.
+fn eval_expr_in(expr: &Expr, env: &mut Env) -> Result<Value, RuntimeError> {
     match expr {
         Expr::Literal(lit) => Ok(eval_literal(lit)),
         Expr::Unary { op, operand, span } => {
-            let v = eval_expr(operand)?;
+            let v = eval_expr_in(operand, env)?;
             eval_unary(*op, v, *span)
         }
         Expr::Binary {
@@ -33,11 +107,10 @@ pub fn eval_expr(expr: &Expr) -> Result<Value, RuntimeError> {
             left,
             right,
             span,
-        } => eval_binary(*op, left, right, *span),
-        Expr::Identifier { span, .. } => Err(RuntimeError::new(
-            *span,
-            "variables are not supported by the evaluator yet",
-        )),
+        } => eval_binary(*op, left, right, *span, env),
+        Expr::Identifier { name, span } => env
+            .lookup(name)
+            .ok_or_else(|| RuntimeError::new(*span, format!("unbound variable `{name}`"))),
         Expr::Call { span, .. } => Err(RuntimeError::new(
             *span,
             "function calls are not supported by the evaluator yet",
@@ -76,26 +149,27 @@ fn eval_binary(
     left: &Expr,
     right: &Expr,
     span: writ_ast::Span,
+    env: &mut Env,
 ) -> Result<Value, RuntimeError> {
     // Logical operators short-circuit, so evaluate the right side lazily.
     match op {
         BinaryOp::And => {
-            return match eval_bool(left)? {
+            return match eval_bool(left, env)? {
                 false => Ok(Value::Bool(false)),
-                true => Ok(Value::Bool(eval_bool(right)?)),
+                true => Ok(Value::Bool(eval_bool(right, env)?)),
             };
         }
         BinaryOp::Or => {
-            return match eval_bool(left)? {
+            return match eval_bool(left, env)? {
                 true => Ok(Value::Bool(true)),
-                false => Ok(Value::Bool(eval_bool(right)?)),
+                false => Ok(Value::Bool(eval_bool(right, env)?)),
             };
         }
         _ => {}
     }
 
-    let l = eval_expr(left)?;
-    let r = eval_expr(right)?;
+    let l = eval_expr_in(left, env)?;
+    let r = eval_expr_in(right, env)?;
     match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
             arithmetic(op, l, r, span)
@@ -183,8 +257,8 @@ fn equal(l: &Value, r: &Value, span: writ_ast::Span) -> Result<bool, RuntimeErro
 }
 
 /// Evaluate an expression that must be a `Bool`.
-fn eval_bool(expr: &Expr) -> Result<bool, RuntimeError> {
-    match eval_expr(expr)? {
+fn eval_bool(expr: &Expr, env: &mut Env) -> Result<bool, RuntimeError> {
+    match eval_expr_in(expr, env)? {
         Value::Bool(b) => Ok(b),
         other => Err(RuntimeError::new(
             expr.span(),
@@ -201,6 +275,19 @@ mod tests {
     fn eval(src: &str) -> Result<Value, RuntimeError> {
         let expr = writ_parser::parse_expr(src).expect("source should parse");
         eval_expr(&expr)
+    }
+
+    /// Parse `stmts` as the body of a function and evaluate that block.
+    fn eval_body(stmts: &str) -> Result<Value, RuntimeError> {
+        let src = format!("fn main() {{ {stmts} }}");
+        let result = writ_parser::parse(&src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let writ_ast::Item::Function(f) = &result.module.items[0];
+        eval_block(&f.body)
     }
 
     #[test]
@@ -256,5 +343,37 @@ mod tests {
     fn type_mismatch_is_a_runtime_error() {
         let e = eval(r#"1 + "x""#).unwrap_err();
         assert!(e.message.contains("Int"), "{}", e.message);
+    }
+
+    // --- let bindings (#12) ------------------------------------------------
+
+    #[test]
+    fn let_binding_resolves_in_later_expressions() {
+        let v = eval_body("let x = 2; let y = x + 3; return y;").unwrap();
+        assert_eq!(v, Value::Int(5));
+    }
+
+    #[test]
+    fn return_stops_the_block() {
+        let v = eval_body("let x = 1; return x; let y = 99;").unwrap();
+        assert_eq!(v, Value::Int(1));
+    }
+
+    #[test]
+    fn immutable_rebinding_is_a_checked_error() {
+        let e = eval_body("let x = 1; let x = 2; return x;").unwrap_err();
+        assert!(e.message.contains("immutable"), "{}", e.message);
+    }
+
+    #[test]
+    fn mutable_rebinding_is_allowed() {
+        let v = eval_body("let mut x = 1; let x = 2; return x;").unwrap();
+        assert_eq!(v, Value::Int(2));
+    }
+
+    #[test]
+    fn unbound_variable_is_a_runtime_error() {
+        let e = eval_body("return missing;").unwrap_err();
+        assert!(e.message.contains("unbound"), "{}", e.message);
     }
 }
