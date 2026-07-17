@@ -7,3 +7,8 @@ repository.workspace = true
 
 [dependencies]
 writ-ast.workspace = true
+
+[dev-dependencies]
+# Test-only: lets the checker's tests parse real source. No runtime dependency,
+# and the crate graph stays acyclic (parser never depends on check).
+writ-parser.workspace = true
