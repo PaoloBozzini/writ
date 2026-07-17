@@ -67,9 +67,40 @@ the effect rows carried by signatures, and the absence of implicit conversions.
 - Untrusted data is `Tainted<T>` and cannot reach a **sink** (shell, query)
   without passing a `sanitize` boundary.
 
+### Escape semantics (ARCH-02): capabilities are second-class
+
+Making `Cap<T>` un-constructible and parameter-only controls how authority is
+*introduced*. It must also control how authority *escapes*, or the "no
+capability parameter ⇒ sandboxed" guarantee leaks. **Decision: capabilities are
+second-class.** A `Cap<T>` value may only be:
+
+- received as a function parameter, and
+- passed on as an argument to another call.
+
+It may **not**:
+
+- be **returned** from a function,
+- be **stored** in a data structure, or
+- be **captured** by a closure.
+
+This is the simplest provably-sound option, and today it is the *only* sound one:
+the language has no closures, structs, or collections, so return position is the
+sole escape channel that exists. Forbidding it keeps the invariant **"a function
+with no capability parameter can reach no effects"** — authority flows strictly
+downward through explicit arguments and can never be smuggled back up or stashed
+for later. If first-class capabilities are ever wanted, the effect system would
+have to track capability flow through captures and returns; that is deliberately
+out of scope.
+
+**Runtime unforgeability.** The interpreter represents a capability as an opaque
+value that no surface syntax can construct — there is no literal, constructor, or
+built-in that yields one. The only capability a program ever sees is the root
+capability the runtime hands to `main`, and values narrowed from it via `grant`.
+Because the checker also forbids escape, a captured or returned token cannot exist
+at runtime either.
+
 *To be specified:* capability types (`Cap<T>`), the root capability and
-narrowing (`grant`), escape semantics (capture / return / storage), the honesty
-check, and taint tracking.
+narrowing (`grant`), the authority check at effect sites, and taint tracking.
 
 ---
 
