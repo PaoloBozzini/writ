@@ -16,5 +16,5 @@ pub use ast::{
     BinaryOp, Block, Contract, Effect, EffectSet, Expr, Function, Item, Literal, LiteralKind,
     Module, Param, Signature, Stmt, TypeExpr, UnaryOp,
 };
-pub use diagnostic::{Diagnostic, Severity};
+pub use diagnostic::{diagnostics_to_json, Diagnostic, Severity};
 pub use span::Span;
