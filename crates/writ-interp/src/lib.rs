@@ -91,7 +91,30 @@ fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Control, RuntimeError> {
             };
             Ok(Control::Return(v))
         }
+        Stmt::If {
+            cond,
+            then_block,
+            else_block,
+            ..
+        } => {
+            if eval_bool(cond, env)? {
+                run_block_stmts(then_block, env)
+            } else if let Some(else_block) = else_block {
+                run_block_stmts(else_block, env)
+            } else {
+                Ok(Control::Normal(Value::Unit))
+            }
+        }
     }
+}
+
+/// Run a block's statements in a nested scope, propagating a `return` outward as
+/// control flow rather than swallowing it into the block's value.
+fn run_block_stmts(block: &Block, env: &mut Env) -> Result<Control, RuntimeError> {
+    env.push_scope();
+    let result = run_stmts(&block.stmts, env);
+    env.pop_scope();
+    result
 }
 
 /// Evaluate an expression in the given environment.
@@ -375,5 +398,41 @@ mod tests {
     fn unbound_variable_is_a_runtime_error() {
         let e = eval_body("return missing;").unwrap_err();
         assert!(e.message.contains("unbound"), "{}", e.message);
+    }
+
+    // --- if / else (#53) ---------------------------------------------------
+
+    #[test]
+    fn if_runs_the_matching_branch() {
+        assert_eq!(
+            eval_body("if 5 > 3 { return 1; } return 2;").unwrap(),
+            Value::Int(1)
+        );
+        assert_eq!(
+            eval_body("if 1 > 3 { return 1; } return 2;").unwrap(),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn if_else_selects_the_else_branch() {
+        assert_eq!(
+            eval_body("if false { return 1; } else { return 2; }").unwrap(),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn else_if_chains() {
+        let body = "let x = 2;\
+            if x == 1 { return 10; } else if x == 2 { return 20; } else { return 30; }\
+            return 0;";
+        assert_eq!(eval_body(body).unwrap(), Value::Int(20));
+    }
+
+    #[test]
+    fn non_bool_condition_is_a_runtime_error() {
+        let e = eval_body("if 1 { return 1; } return 0;").unwrap_err();
+        assert!(e.message.contains("Bool"), "{}", e.message);
     }
 }
