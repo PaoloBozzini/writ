@@ -1,0 +1,10 @@
+[package]
+name = "writ-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+writ-ast.workspace = true
+writ-lexer.workspace = true

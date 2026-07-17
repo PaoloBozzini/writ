@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/writ-ast",
+    "crates/writ-lexer",
+    "crates/writ-parser",
+    "crates/writ-check",
+    "crates/writ-interp",
+    "crates/writ-cli",
+]
+
+# Shared metadata for every crate in the Writ compiler pipeline.
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/PaoloBozzini/writ"
+
+# Internal crates, referenced by path so the whole pipeline builds from source.
+[workspace.dependencies]
+writ-ast = { path = "crates/writ-ast" }
+writ-lexer = { path = "crates/writ-lexer" }
+writ-parser = { path = "crates/writ-parser" }
+writ-check = { path = "crates/writ-check" }
+writ-interp = { path = "crates/writ-interp" }
