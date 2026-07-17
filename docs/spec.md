@@ -90,6 +90,42 @@ blame, and the optional SMT-backed static verification pass.
 
 ---
 
+## Pass architecture and annotations
+
+The compiler runs several analysis passes over one shared, immutable AST: the
+type checker, the effect system (inference + honesty), the capability authority
+checker, and the contract checker. Later passes need earlier passes' results,
+and a back end will need types. **Decision (ARCH-04): those results live in
+per-pass side tables keyed by a stable node id — not in a mutated or re-wrapped
+AST.**
+
+- The AST is the **stable shared contract** and stays immutable. Each pass reads
+  the AST and writes its facts into its own `Map<NodeId, _>` (for example
+  `types: Map<NodeId, Type>`, `effects: Map<NodeId, EffectSet>`). `writ-ast`
+  therefore stays dependency-light — spans, node types, and the [`NodeId`] key
+  type only, with no imports of any checker.
+- Rejected alternative: a distinct typed AST / HIR produced after checking. It
+  attaches results directly to nodes but adds a second tree to keep in sync with
+  the front end; the side-table approach keeps consumers decoupled and matches
+  Writ's locality principle.
+
+**Pass dependency rule.** Passes are otherwise independent (either pillar can be
+disabled without the other):
+
+- `types` depends on nothing.
+- `effects` (inference + honesty) depends on nothing.
+- `authority` consumes `effects` facts (does the caller hold a token for each
+  effect performed?) — this is the one allowed cross-pass dependency.
+- `contracts` depends on neither capabilities nor effects.
+- A future `codegen` back end consumes `types`.
+
+*Implementation note:* the `NodeId` key type exists in `writ-ast`; threading an
+id onto every node is done when the first consumer that must resolve a fact **by
+node identity** lands (side-table population), so the AST is not churned ahead of
+need.
+
+---
+
 ## Appendix: diagnostics are an API
 
 Diagnostics are consumed by models, not just humans. Every diagnostic carries a
