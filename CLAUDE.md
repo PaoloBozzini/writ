@@ -122,7 +122,7 @@ Diagnostics are consumed by models, not just humans. So:
 
 ## Guardrails — never do
 
-- **Never merge PRs, never push to `main`, never force-push.** The human's control point is the merge; keep it intact.
+- **Don't merge PRs or push to `main` on your own initiative** — by default, deliver reviewable PRs and let the human merge; their merge is their control point. You *may* merge or push to `main` when the human explicitly directs it in the session (e.g. "merge #41–#50"); carrying out an explicit merge instruction is exercising that control, not bypassing it. Even then, **never force-push**, and never merge a PR just because it looks ready or CI is green.
 - Never rewrite or delete someone else's work; never `git stash`/discard a dirty tree to make room.
 - Never weaken a check to make a build pass (no removing a `-D warnings`, no `#[allow]` to silence a real lint, no deleting a failing test).
 - Never introduce ambient authority or global mutable state.
