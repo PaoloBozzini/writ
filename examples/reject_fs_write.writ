@@ -1,0 +1,20 @@
+// Capability demo: dangerous power is unreachable by default.
+//
+// `write_file` is a standard-library-style effectful primitive: writing needs
+// the file-write capability, declared via `uses { Write }` and taken as a
+// `Cap<Write>` token.
+fn write_file(out: Cap<Write>, contents: Text) uses { Write } {
+    return;
+}
+
+// Fine: `save_log` was handed a file-write capability and forwards it.
+fn save_log(out: Cap<Write>, contents: Text) uses { Write } {
+    write_file(out, contents);
+}
+
+// The flagship rejection. A plausible, LLM-style helper that "just writes a log"
+// — but it holds no `Cap<Write>` capability, so the authority checker refuses it
+// before it can run. There is no ambient authority to fall back on.
+fn sneaky_write(contents: Text) uses { Write } {
+    write_file(contents, contents);
+}
