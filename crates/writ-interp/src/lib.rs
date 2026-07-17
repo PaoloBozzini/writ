@@ -27,7 +27,7 @@ use writ_ast::{
 const PRINT: &str = "print";
 
 pub use env::Env;
-pub use value::{RuntimeError, Value};
+pub use value::{Blame, RuntimeError, Value};
 
 /// How evaluation of a statement flows: continue with a value, or return out of
 /// the enclosing block carrying a value.
@@ -185,7 +185,34 @@ impl<'m> Interpreter<'m> {
             env.define(&param.name, value, false)
                 .map_err(|m| RuntimeError::new(param.span, m))?;
         }
-        self.eval_block_in(&func.body, &mut env)
+
+        // Preconditions are checked at entry, against the arguments. A failure
+        // is the caller's fault — it passed input the function forbids.
+        for clause in &func.signature.requires {
+            if !self.eval_bool(&clause.predicate, &mut env)? {
+                return Err(RuntimeError::precondition(clause.span));
+            }
+        }
+
+        let result = self.eval_block_in(&func.body, &mut env)?;
+
+        // Postconditions are checked at return, with `result` bound to the
+        // returned value. A failure is the implementation's fault — the body
+        // computed a wrong answer for allowed input.
+        if !func.signature.ensures.is_empty() {
+            env.push_scope();
+            env.define("result", result.clone(), false)
+                .map_err(|m| RuntimeError::new(func.signature.span, m))?;
+            for clause in &func.signature.ensures {
+                if !self.eval_bool(&clause.predicate, &mut env)? {
+                    env.pop_scope();
+                    return Err(RuntimeError::postcondition(clause.span));
+                }
+            }
+            env.pop_scope();
+        }
+
+        Ok(result)
     }
 
     /// Evaluate a block, opening a nested lexical scope so its bindings do not
@@ -673,6 +700,57 @@ fn main() {
             interp.output(),
             vec!["a".to_string(), "3".to_string(), "true".to_string()]
         );
+    }
+
+    // --- contracts: runtime checking with blame (#26) ----------------------
+
+    #[test]
+    fn precondition_holds_then_body_runs() {
+        let src = "fn half(n: Int) -> Int requires n > 0 { return n / 2; }";
+        assert_eq!(
+            run_program(src, "half", vec![Value::Int(4)]).unwrap(),
+            Value::Int(2)
+        );
+    }
+
+    #[test]
+    fn failed_precondition_blames_the_caller() {
+        let src = "fn half(n: Int) -> Int requires n > 0 { return n / 2; }";
+        let e = run_program(src, "half", vec![Value::Int(0)]).unwrap_err();
+        assert_eq!(e.blame, Some(Blame::Caller));
+        assert!(e.message.contains("precondition"), "{}", e.message);
+    }
+
+    #[test]
+    fn satisfied_postcondition_passes() {
+        // `result` refers to the return value; the postcondition also sees params.
+        let src = "fn inc(n: Int) -> Int ensures result > n { return n + 1; }";
+        assert_eq!(
+            run_program(src, "inc", vec![Value::Int(5)]).unwrap(),
+            Value::Int(6)
+        );
+    }
+
+    #[test]
+    fn failed_postcondition_blames_the_implementation() {
+        // A wrong-but-harmless absolute value: returns its input unchanged.
+        let src = "fn abs(n: Int) -> Int ensures result >= 0 { return n; }";
+        // Allowed input, wrong answer => implementation is blamed.
+        let e = run_program(src, "abs", vec![Value::Int(0 - 5)]).unwrap_err();
+        assert_eq!(e.blame, Some(Blame::Implementation));
+        assert!(e.message.contains("postcondition"), "{}", e.message);
+        // A correct result satisfies it.
+        assert_eq!(
+            run_program(src, "abs", vec![Value::Int(5)]).unwrap(),
+            Value::Int(5)
+        );
+    }
+
+    #[test]
+    fn ordinary_runtime_errors_carry_no_blame() {
+        let src = "fn boom(n: Int) -> Int { return n / 0; }";
+        let e = run_program(src, "boom", vec![Value::Int(1)]).unwrap_err();
+        assert_eq!(e.blame, None);
     }
 
     #[test]
