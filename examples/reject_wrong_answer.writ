@@ -1,0 +1,12 @@
+// Contracts demo: capabilities catch dangerous code, contracts catch wrong code.
+//
+// `max` is pure — no capabilities, nothing dangerous — it just returns the
+// wrong answer. Its `ensures` clauses pin down what "the maximum" means: the
+// result must be at least each input. This body returns the difference instead,
+// so the postcondition is violated and the implementation is blamed.
+fn max(a: Int, b: Int) -> Int
+    ensures result >= a
+    ensures result >= b
+{
+    return a - b;
+}
