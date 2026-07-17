@@ -1,0 +1,7 @@
+fn write_line(out: Cap<Write>, msg: Text) -> Int
+    uses { Write }
+    requires len(msg) > 0
+    ensures true
+{
+    return 0;
+}

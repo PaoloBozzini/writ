@@ -1,0 +1,181 @@
+Module {
+    items: [
+        Function(
+            Function {
+                signature: Signature {
+                    name: "write_line",
+                    params: [
+                        Param {
+                            name: "out",
+                            ty: TypeExpr {
+                                name: "Cap",
+                                args: [
+                                    TypeExpr {
+                                        name: "Write",
+                                        args: [],
+                                        span: Span {
+                                            start: 23,
+                                            end: 28,
+                                        },
+                                    },
+                                ],
+                                span: Span {
+                                    start: 19,
+                                    end: 29,
+                                },
+                            },
+                            span: Span {
+                                start: 14,
+                                end: 29,
+                            },
+                        },
+                        Param {
+                            name: "msg",
+                            ty: TypeExpr {
+                                name: "Text",
+                                args: [],
+                                span: Span {
+                                    start: 36,
+                                    end: 40,
+                                },
+                            },
+                            span: Span {
+                                start: 31,
+                                end: 40,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 45,
+                                end: 48,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [
+                            Effect {
+                                name: "Write",
+                                span: Span {
+                                    start: 60,
+                                    end: 65,
+                                },
+                            },
+                        ],
+                        span: Some(
+                            Span {
+                                start: 53,
+                                end: 67,
+                            },
+                        ),
+                    },
+                    requires: [
+                        Contract {
+                            predicate: Binary {
+                                op: Gt,
+                                left: Call {
+                                    callee: Identifier {
+                                        name: "len",
+                                        span: Span {
+                                            start: 81,
+                                            end: 84,
+                                        },
+                                    },
+                                    args: [
+                                        Identifier {
+                                            name: "msg",
+                                            span: Span {
+                                                start: 85,
+                                                end: 88,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        start: 81,
+                                        end: 89,
+                                    },
+                                },
+                                right: Literal(
+                                    Literal {
+                                        kind: Int(
+                                            0,
+                                        ),
+                                        span: Span {
+                                            start: 92,
+                                            end: 93,
+                                        },
+                                    },
+                                ),
+                                span: Span {
+                                    start: 81,
+                                    end: 93,
+                                },
+                            },
+                            span: Span {
+                                start: 72,
+                                end: 93,
+                            },
+                        },
+                    ],
+                    ensures: [
+                        Contract {
+                            predicate: Literal(
+                                Literal {
+                                    kind: Bool(
+                                        true,
+                                    ),
+                                    span: Span {
+                                        start: 106,
+                                        end: 110,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 98,
+                                end: 110,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 0,
+                        end: 110,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                Literal(
+                                    Literal {
+                                        kind: Int(
+                                            0,
+                                        ),
+                                        span: Span {
+                                            start: 124,
+                                            end: 125,
+                                        },
+                                    },
+                                ),
+                            ),
+                            span: Span {
+                                start: 117,
+                                end: 126,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 111,
+                        end: 128,
+                    },
+                },
+                span: Span {
+                    start: 0,
+                    end: 128,
+                },
+            },
+        ),
+    ],
+}

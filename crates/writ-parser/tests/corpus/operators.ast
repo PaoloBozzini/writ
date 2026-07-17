@@ -1,0 +1,187 @@
+Module {
+    items: [
+        Function(
+            Function {
+                signature: Signature {
+                    name: "pred",
+                    params: [
+                        Param {
+                            name: "a",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 11,
+                                    end: 14,
+                                },
+                            },
+                            span: Span {
+                                start: 8,
+                                end: 14,
+                            },
+                        },
+                        Param {
+                            name: "b",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 19,
+                                    end: 22,
+                                },
+                            },
+                            span: Span {
+                                start: 16,
+                                end: 22,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 27,
+                                end: 30,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 0,
+                        end: 30,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Let {
+                            name: "c",
+                            mutable: false,
+                            ty: None,
+                            value: Binary {
+                                op: Or,
+                                left: Binary {
+                                    op: And,
+                                    left: Unary {
+                                        op: Not,
+                                        operand: Binary {
+                                            op: Lt,
+                                            left: Identifier {
+                                                name: "a",
+                                                span: Span {
+                                                    start: 47,
+                                                    end: 48,
+                                                },
+                                            },
+                                            right: Identifier {
+                                                name: "b",
+                                                span: Span {
+                                                    start: 51,
+                                                    end: 52,
+                                                },
+                                            },
+                                            span: Span {
+                                                start: 47,
+                                                end: 52,
+                                            },
+                                        },
+                                        span: Span {
+                                            start: 45,
+                                            end: 52,
+                                        },
+                                    },
+                                    right: Binary {
+                                        op: Ne,
+                                        left: Identifier {
+                                            name: "a",
+                                            span: Span {
+                                                start: 57,
+                                                end: 58,
+                                            },
+                                        },
+                                        right: Identifier {
+                                            name: "b",
+                                            span: Span {
+                                                start: 62,
+                                                end: 63,
+                                            },
+                                        },
+                                        span: Span {
+                                            start: 57,
+                                            end: 63,
+                                        },
+                                    },
+                                    span: Span {
+                                        start: 45,
+                                        end: 63,
+                                    },
+                                },
+                                right: Binary {
+                                    op: Ge,
+                                    left: Identifier {
+                                        name: "a",
+                                        span: Span {
+                                            start: 67,
+                                            end: 68,
+                                        },
+                                    },
+                                    right: Literal(
+                                        Literal {
+                                            kind: Int(
+                                                0,
+                                            ),
+                                            span: Span {
+                                                start: 72,
+                                                end: 73,
+                                            },
+                                        },
+                                    ),
+                                    span: Span {
+                                        start: 67,
+                                        end: 73,
+                                    },
+                                },
+                                span: Span {
+                                    start: 45,
+                                    end: 73,
+                                },
+                            },
+                            span: Span {
+                                start: 37,
+                                end: 74,
+                            },
+                        },
+                        Return {
+                            value: Some(
+                                Identifier {
+                                    name: "c",
+                                    span: Span {
+                                        start: 86,
+                                        end: 87,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 79,
+                                end: 88,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 31,
+                        end: 90,
+                    },
+                },
+                span: Span {
+                    start: 0,
+                    end: 90,
+                },
+            },
+        ),
+    ],
+}

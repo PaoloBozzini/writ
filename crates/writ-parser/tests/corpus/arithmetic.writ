@@ -1,0 +1,5 @@
+fn compute(a: Int, b: Int) -> Int {
+    let x = a + b * 2;
+    let y = (a + b) * 2;
+    return x - y;
+}

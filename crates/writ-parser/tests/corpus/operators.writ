@@ -1,0 +1,4 @@
+fn pred(a: Int, b: Int) -> Int {
+    let c = !(a < b) && a != b || a >= 0;
+    return c;
+}
