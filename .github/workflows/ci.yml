@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# The compiler is the trust anchor for a language whose whole point is
+# machine-checkable correctness, so CI runs the exact three-check gate from
+# CLAUDE.md — deterministic and strict — on every push and pull request.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gate:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all
