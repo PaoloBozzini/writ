@@ -1,11 +1,16 @@
 //! `writ-check` — all static analysis over the AST.
 //!
-//! Home of the two orthogonal pillars: the type checker and effect system, the
-//! capability authority checker, and the contract checker. It depends on the
-//! AST and **never** on the interpreter. The passes land in later milestones.
+//! Home of Writ's checkers. Following the pillar-independence principle, each
+//! check is its own pass module with no cross-pass imports: a pass reads the AST
+//! and shared [`writ_ast::Diagnostic`]s and nothing else. The passes are
+//! composable but independent — either pillar can be run or dropped without the
+//! other.
+//!
+//! Passes are computed transiently and report diagnostics rather than mutating
+//! or wrapping the AST, so the AST stays the stable shared contract.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {}
-}
+mod ty;
+mod types;
+
+pub use ty::Type;
+pub use types::check_types;
