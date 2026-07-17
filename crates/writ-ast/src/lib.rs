@@ -1,14 +1,20 @@
 //! `writ-ast` — the shared, standalone data types for the whole compiler.
 //!
-//! This crate is the contract every other crate agrees on: the AST, plus the
-//! `Span` and `Diagnostic` types. It depends on nothing heavy, and nothing in
-//! the pipeline may make it depend on the interpreter or the CLI.
+//! This crate is the contract every other crate agrees on: the abstract syntax
+//! tree, plus the [`Span`] and [`Diagnostic`] types. It depends on nothing
+//! heavy, and nothing in the pipeline may make it depend on the interpreter or
+//! the CLI.
 //!
-//! The concrete node definitions land in later milestones; for now this is the
-//! empty scaffold that anchors the workspace's dependency graph.
+//! The AST is deliberately *untyped* — nodes carry spans but no pass results —
+//! so it can serve both the interpreter and the future compiler unchanged.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {}
-}
+mod ast;
+mod diagnostic;
+mod span;
+
+pub use ast::{
+    BinaryOp, Block, Contract, Effect, EffectSet, Expr, Function, Item, Literal, LiteralKind,
+    Module, Param, Signature, Stmt, TypeExpr, UnaryOp,
+};
+pub use diagnostic::{Diagnostic, Severity};
+pub use span::Span;
