@@ -9,8 +9,10 @@
 //! Passes are computed transiently and report diagnostics rather than mutating
 //! or wrapping the AST, so the AST stays the stable shared contract.
 
+mod effects;
 mod ty;
 mod types;
 
+pub use effects::check_effects;
 pub use ty::Type;
 pub use types::check_types;
