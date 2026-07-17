@@ -11,6 +11,7 @@ name = "writ-check"
 version = "0.0.0"
 dependencies = [
  "writ-ast",
+ "writ-parser",
 ]
 
 [[package]]
@@ -27,6 +28,7 @@ name = "writ-interp"
 version = "0.0.0"
 dependencies = [
  "writ-ast",
+ "writ-parser",
 ]
 
 [[package]]
