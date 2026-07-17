@@ -1,0 +1,200 @@
+Module {
+    items: [
+        Function(
+            Function {
+                signature: Signature {
+                    name: "compute",
+                    params: [
+                        Param {
+                            name: "a",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 14,
+                                    end: 17,
+                                },
+                            },
+                            span: Span {
+                                start: 11,
+                                end: 17,
+                            },
+                        },
+                        Param {
+                            name: "b",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 22,
+                                    end: 25,
+                                },
+                            },
+                            span: Span {
+                                start: 19,
+                                end: 25,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 30,
+                                end: 33,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 0,
+                        end: 33,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Let {
+                            name: "x",
+                            mutable: false,
+                            ty: None,
+                            value: Binary {
+                                op: Add,
+                                left: Identifier {
+                                    name: "a",
+                                    span: Span {
+                                        start: 48,
+                                        end: 49,
+                                    },
+                                },
+                                right: Binary {
+                                    op: Mul,
+                                    left: Identifier {
+                                        name: "b",
+                                        span: Span {
+                                            start: 52,
+                                            end: 53,
+                                        },
+                                    },
+                                    right: Literal(
+                                        Literal {
+                                            kind: Int(
+                                                2,
+                                            ),
+                                            span: Span {
+                                                start: 56,
+                                                end: 57,
+                                            },
+                                        },
+                                    ),
+                                    span: Span {
+                                        start: 52,
+                                        end: 57,
+                                    },
+                                },
+                                span: Span {
+                                    start: 48,
+                                    end: 57,
+                                },
+                            },
+                            span: Span {
+                                start: 40,
+                                end: 58,
+                            },
+                        },
+                        Let {
+                            name: "y",
+                            mutable: false,
+                            ty: None,
+                            value: Binary {
+                                op: Mul,
+                                left: Binary {
+                                    op: Add,
+                                    left: Identifier {
+                                        name: "a",
+                                        span: Span {
+                                            start: 72,
+                                            end: 73,
+                                        },
+                                    },
+                                    right: Identifier {
+                                        name: "b",
+                                        span: Span {
+                                            start: 76,
+                                            end: 77,
+                                        },
+                                    },
+                                    span: Span {
+                                        start: 72,
+                                        end: 77,
+                                    },
+                                },
+                                right: Literal(
+                                    Literal {
+                                        kind: Int(
+                                            2,
+                                        ),
+                                        span: Span {
+                                            start: 81,
+                                            end: 82,
+                                        },
+                                    },
+                                ),
+                                span: Span {
+                                    start: 72,
+                                    end: 82,
+                                },
+                            },
+                            span: Span {
+                                start: 63,
+                                end: 83,
+                            },
+                        },
+                        Return {
+                            value: Some(
+                                Binary {
+                                    op: Sub,
+                                    left: Identifier {
+                                        name: "x",
+                                        span: Span {
+                                            start: 95,
+                                            end: 96,
+                                        },
+                                    },
+                                    right: Identifier {
+                                        name: "y",
+                                        span: Span {
+                                            start: 99,
+                                            end: 100,
+                                        },
+                                    },
+                                    span: Span {
+                                        start: 95,
+                                        end: 100,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 88,
+                                end: 101,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 34,
+                        end: 103,
+                    },
+                },
+                span: Span {
+                    start: 0,
+                    end: 103,
+                },
+            },
+        ),
+    ],
+}
