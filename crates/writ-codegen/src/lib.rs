@@ -15,10 +15,11 @@
 //! Covers `Int` / `Bool` / `Text`, the arithmetic / comparison / boolean
 //! operators (with the interpreter's checked overflow and division-by-zero
 //! semantics, and short-circuit `&&` / `||`), `let` / `if` / `return`, function
-//! calls, `print`, sum-type constructors and `match`, capabilities
-//! (`Cap<..>` parameters and `grant<A>(..)` narrowing), and lowered contract
-//! checks. Not yet supported: nested sub-patterns inside a `match` arm — it is
-//! reported as a [`CodegenError`] rather than mis-compiled.
+//! calls, `print`, sum-type constructors and `match` (including nested
+//! sub-patterns), capabilities (`Cap<..>` parameters and `grant<A>(..)`
+//! narrowing), and lowered contract checks — the full surface the interpreter
+//! runs. Any construct the front end could add later that codegen does not yet
+//! handle is reported as a [`CodegenError`] rather than mis-compiled.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -484,25 +485,21 @@ impl Emitter {
                     ))
                 }
             }
-            Pattern::Variant { name, args, span } => {
+            Pattern::Variant { name, args, .. } => {
+                // Test this variant's tag, then recurse into each field: a
+                // sub-pattern contributes its own tag test (folded into the arm
+                // condition) and its bindings, read from `{scrut}.fields[i]`.
+                let mut cond = format!("w_is({scrut}, \"{name}\")");
                 let mut bindings = String::new();
                 for (i, sub) in args.iter().enumerate() {
-                    match sub {
-                        Pattern::Wildcard { .. } => {}
-                        Pattern::Ident { name: n, .. } if !self.ctors.contains_key(n) => {
-                            let _ =
-                                write!(bindings, "WValue {} = {scrut}.fields[{i}]; ", local(n));
-                        }
-                        _ => {
-                            return Err(CodegenError::new(
-                                sub.span(),
-                                "nested sub-patterns in a `match` arm are not supported by the C back end yet",
-                            ))
-                        }
+                    let field = format!("{scrut}.fields[{i}]");
+                    let (subcond, subbind) = self.pattern_test(sub, &field)?;
+                    if subcond != "1" {
+                        cond = format!("({cond} && {subcond})");
                     }
+                    bindings.push_str(&subbind);
                 }
-                let _ = span;
-                Ok((format!("w_is({scrut}, \"{name}\")"), bindings))
+                Ok((cond, bindings))
             }
         }
     }
