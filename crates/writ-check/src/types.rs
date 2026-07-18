@@ -702,6 +702,51 @@ impl<'m> Checker<'m> {
         }
     }
 
+    /// Type-check a text built-in, or return `None` if `name` is not one.
+    /// `Text` is a sequence of Unicode scalar values, so indices are char-based:
+    /// `concat(Text, Text) -> Text`, `text_len(Text) -> Int`,
+    /// `char_at(Text, Int) -> Text`, `substring(Text, Int, Int) -> Text`.
+    fn check_text_builtin(
+        &mut self,
+        name: &str,
+        arg_types: &[Type],
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Type> {
+        let (params, ret): (Vec<Type>, Type) = match name {
+            "concat" => (vec![Type::Text, Type::Text], Type::Text),
+            "text_len" => (vec![Type::Text], Type::Int),
+            "char_at" => (vec![Type::Text, Type::Int], Type::Text),
+            "substring" => (vec![Type::Text, Type::Int, Type::Int], Type::Text),
+            _ => return None,
+        };
+        if arg_types.len() != params.len() {
+            self.error(
+                "T0004",
+                span,
+                format!(
+                    "`{name}` expects {} argument(s), found {}",
+                    params.len(),
+                    arg_types.len()
+                ),
+            );
+            return Some(ret);
+        }
+        for (i, (expected, actual)) in params.iter().zip(arg_types).enumerate() {
+            if !actual.compatible(expected) {
+                self.error(
+                    "T0001",
+                    args[i].span(),
+                    format!(
+                        "argument {} to `{name}`: expected `{expected}`, found `{actual}`",
+                        i + 1
+                    ),
+                );
+            }
+        }
+        Some(ret)
+    }
+
     /// Type-check `grant<A>(cap)`: narrow a broader capability to authority `A`.
     fn check_grant(
         &mut self,
@@ -826,6 +871,14 @@ impl<'m> Checker<'m> {
                 Type::Named { name, args } if name == TAINTED && args.len() == 1 => args[0].clone(),
                 other => other.clone(),
             };
+        }
+
+        // Text built-ins (capability-free, like `print`): shadowable by a user
+        // function of the same name.
+        if !self.funcs.contains_key(name.as_str()) {
+            if let Some(ty) = self.check_text_builtin(name, &arg_types, args, span) {
+                return ty;
+            }
         }
 
         // A constructor call, e.g. `Some(x)`, builds a value of its sum type.

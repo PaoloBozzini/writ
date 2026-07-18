@@ -175,6 +175,93 @@ impl<'m> Interpreter<'m> {
         self.output.borrow().clone()
     }
 
+    /// The text built-ins. `Text` is a sequence of Unicode scalar values, so
+    /// `text_len`, `char_at`, and `substring` are all char-based; out-of-range
+    /// access is a runtime error.
+    fn builtin_text(
+        &self,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let text = |v: &Value| -> Result<String, RuntimeError> {
+            match v {
+                Value::Text(s) => Ok(s.clone()),
+                other => Err(RuntimeError::new(
+                    span,
+                    format!(
+                        "`{name}` expects a `Text` argument, got {}",
+                        other.type_name()
+                    ),
+                )),
+            }
+        };
+        let int = |v: &Value| -> Result<i64, RuntimeError> {
+            match v {
+                Value::Int(n) => Ok(*n),
+                other => Err(RuntimeError::new(
+                    span,
+                    format!(
+                        "`{name}` expects an `Int` argument, got {}",
+                        other.type_name()
+                    ),
+                )),
+            }
+        };
+        let arity = |n: usize| -> Result<(), RuntimeError> {
+            if args.len() == n {
+                Ok(())
+            } else {
+                Err(RuntimeError::new(
+                    span,
+                    format!("`{name}` expects {n} argument(s), got {}", args.len()),
+                ))
+            }
+        };
+        match name {
+            "concat" => {
+                arity(2)?;
+                Ok(Value::Text(text(&args[0])? + &text(&args[1])?))
+            }
+            "text_len" => {
+                arity(1)?;
+                Ok(Value::Int(text(&args[0])?.chars().count() as i64))
+            }
+            "char_at" => {
+                arity(2)?;
+                let s = text(&args[0])?;
+                let i = int(&args[1])?;
+                let c = usize::try_from(i)
+                    .ok()
+                    .and_then(|i| s.chars().nth(i))
+                    .ok_or_else(|| {
+                        RuntimeError::new(span, format!("`char_at` index {i} is out of range"))
+                    })?;
+                Ok(Value::Text(c.to_string()))
+            }
+            "substring" => {
+                arity(3)?;
+                let s = text(&args[0])?;
+                let start = int(&args[1])?;
+                let end = int(&args[2])?;
+                let len = s.chars().count() as i64;
+                if start < 0 || end < start || end > len {
+                    return Err(RuntimeError::new(
+                        span,
+                        format!("`substring` range {start}..{end} is out of bounds (len {len})"),
+                    ));
+                }
+                let sub: String = s
+                    .chars()
+                    .skip(start as usize)
+                    .take((end - start) as usize)
+                    .collect();
+                Ok(Value::Text(sub))
+            }
+            _ => unreachable!("dispatched only for text built-ins"),
+        }
+    }
+
     /// The `print` built-in: emit one line per call. Requires exactly one
     /// argument.
     fn builtin_print(&self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
@@ -220,6 +307,9 @@ impl<'m> Interpreter<'m> {
                 )
             })?;
             return Ok(value);
+        }
+        if matches!(name, "concat" | "text_len" | "char_at" | "substring") {
+            return self.builtin_text(name, args, span);
         }
         Err(RuntimeError::new(
             span,

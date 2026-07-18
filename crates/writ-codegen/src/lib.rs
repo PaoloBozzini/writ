@@ -15,9 +15,11 @@
 //! Covers `Int` / `Bool` / `Text`, the arithmetic / comparison / boolean
 //! operators (with the interpreter's checked overflow and division-by-zero
 //! semantics, and short-circuit `&&` / `||`), `let` / `if` / `return`, function
-//! calls, `print`, sum-type constructors and `match` (including nested
-//! sub-patterns), capabilities (`Cap<..>` parameters and `grant<A>(..)`
-//! narrowing), and lowered contract checks — the full surface the interpreter
+//! calls, `print`, the text built-ins (`concat` / `text_len` / `char_at` /
+//! `substring`, char-based via a small UTF-8 decoder), sum-type constructors and
+//! `match` (including nested sub-patterns), capabilities (`Cap<..>` parameters
+//! and `grant<A>(..)` narrowing), and lowered contract checks — the full surface
+//! the interpreter
 //! runs. Any construct the front end could add later that codegen does not yet
 //! handle is reported as a [`CodegenError`] rather than mis-compiled.
 
@@ -116,6 +118,55 @@ static void w_fprint(FILE *f, WValue v) {
     }
 }
 static WValue w_print(WValue v) { w_fprint(stdout, v); printf("\n"); return w_unit(); }
+
+/* Text is a sequence of Unicode scalar values (UTF-8), matching the interpreter,
+   so text built-ins index by code point, not byte. */
+static int64_t w_u8_step(const unsigned char *p) {
+    unsigned char c = *p;
+    if (c < 0x80) return 1;
+    if ((c >> 5) == 0x6) return 2;
+    if ((c >> 4) == 0xE) return 3;
+    if ((c >> 3) == 0x1E) return 4;
+    return 1;
+}
+static int64_t w_u8_count(const char *s) {
+    int64_t n = 0; const unsigned char *p = (const unsigned char *) s;
+    while (*p) { p += w_u8_step(p); n++; }
+    return n;
+}
+/* Pointer to the i-th code point, or 0 if i is out of range. */
+static const char *w_u8_at(const char *s, int64_t i) {
+    if (i < 0) return 0;
+    const unsigned char *p = (const unsigned char *) s;
+    while (*p && i > 0) { p += w_u8_step(p); i--; }
+    if (i != 0 || *p == 0) return 0;
+    return (const char *) p;
+}
+static WValue w_text_len(WValue s) { return w_int(w_u8_count(s.s)); }
+static WValue w_concat(WValue a, WValue b) {
+    size_t la = strlen(a.s), lb = strlen(b.s);
+    char *r = malloc(la + lb + 1);
+    memcpy(r, a.s, la); memcpy(r + la, b.s, lb); r[la + lb] = 0;
+    return w_text(r);
+}
+static WValue w_char_at(WValue s, WValue iv) {
+    const char *p = w_u8_at(s.s, iv.i);
+    if (!p) w_trap("char_at: index out of range");
+    size_t step = (size_t) w_u8_step((const unsigned char *) p);
+    char *r = malloc(step + 1);
+    memcpy(r, p, step); r[step] = 0;
+    return w_text(r);
+}
+static WValue w_substring(WValue s, WValue sv, WValue ev) {
+    int64_t start = sv.i, end = ev.i, len = w_u8_count(s.s);
+    if (start < 0 || end < start || end > len) w_trap("substring: range out of bounds");
+    const char *ps = (start == len) ? (s.s + strlen(s.s)) : w_u8_at(s.s, start);
+    const char *pe = (end == len) ? (s.s + strlen(s.s)) : w_u8_at(s.s, end);
+    size_t nbytes = (size_t) (pe - ps);
+    char *r = malloc(nbytes + 1);
+    memcpy(r, ps, nbytes); r[nbytes] = 0;
+    return w_text(r);
+}
 "#;
 
 /// Emit a complete C translation unit for `module`.
@@ -410,6 +461,23 @@ impl Emitter {
                 .first()
                 .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
             return Ok(format!("({arg})"));
+        }
+        // Text built-ins map to the UTF-8 runtime helpers.
+        if let Some(helper) = match name.as_str() {
+            "concat" => Some(("w_concat", 2)),
+            "text_len" => Some(("w_text_len", 1)),
+            "char_at" => Some(("w_char_at", 2)),
+            "substring" => Some(("w_substring", 3)),
+            _ => None,
+        } {
+            let (func, arity) = helper;
+            if emitted.len() != arity {
+                return Err(CodegenError::new(
+                    span,
+                    format!("`{name}` expects {arity} argument(s)"),
+                ));
+            }
+            return Ok(format!("{func}({})", emitted.join(", ")));
         }
         // `grant<A>(cap)` narrows authority to `A`. Capabilities carry no
         // runtime effect (there are no effectful built-ins), so it just yields
