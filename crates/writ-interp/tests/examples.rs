@@ -38,6 +38,29 @@ fn factorial_runs_end_to_end() {
     assert_eq!(run_example("factorial.writ"), vec!["120".to_string()]);
 }
 
+#[test]
+fn rock_paper_scissors_example_decides_the_winner() {
+    assert_eq!(
+        run_example("rock_paper_scissors.writ"),
+        vec!["player 1 wins", "player 2 wins", "draw"]
+    );
+}
+
+#[test]
+fn shapes_example_computes_areas() {
+    assert_eq!(run_example("shapes.writ"), vec!["75", "12"]);
+}
+
+#[test]
+fn contract_example_runs_with_contracts_that_hold() {
+    assert_eq!(run_example("contract.writ"), vec!["7", "3", "5", "9"]);
+}
+
+#[test]
+fn text_example_processes_strings() {
+    assert_eq!(run_example("text.writ"), vec!["tirW", "HELLO!"]);
+}
+
 /// Parse the example at `name`, run `main` — handing it a root capability for
 /// each of its capability parameters, as the runtime does — and return the
 /// printed lines.

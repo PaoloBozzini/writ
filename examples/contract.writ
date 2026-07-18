@@ -1,0 +1,35 @@
+// Contracts that hold: correctness stated in the signature and delivered.
+//
+// A `requires` is a promise the *caller* must keep; an `ensures` is a promise the
+// *implementation* must keep. They are checked at runtime, and `writ verify` can
+// prove the ones over integers for all inputs. (For the failing case — an
+// implementation that breaks its `ensures` — see reject_wrong_answer.writ.)
+
+// `abs` promises a non-negative result, and delivers it.
+fn abs(n: Int) -> Int
+    ensures result >= 0
+{
+    if n < 0 {
+        return -n;
+    }
+    return n;
+}
+
+// `clamp_low` raises `n` to at least `lo`. The caller must pass a sane floor
+// (`requires lo >= 0`); the result is guaranteed to be at least `lo`.
+fn clamp_low(n: Int, lo: Int) -> Int
+    requires lo >= 0
+    ensures result >= lo
+{
+    if n < lo {
+        return lo;
+    }
+    return n;
+}
+
+fn main() {
+    print(abs(-7));          // 7
+    print(abs(3));           // 3
+    print(clamp_low(2, 5));  // 5
+    print(clamp_low(9, 5));  // 9
+}

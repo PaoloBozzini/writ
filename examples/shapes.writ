@@ -1,0 +1,20 @@
+// Defining your own sum type, with multi-field variants.
+//
+// A `Shape` is one of two shapes, each carrying its own data. `match` splits on
+// the variant and binds its fields, so `area` handles circles and rectangles
+// separately and exhaustively.
+
+type Shape = Circle(Int) | Rect(Int, Int)
+
+// Area, using an integer approximation of pi (×3) for the circle.
+fn area(s: Shape) -> Int {
+    return match s {
+        Circle(r)  => 3 * r * r,
+        Rect(w, h) => w * h,
+    };
+}
+
+fn main() {
+    print(area(Circle(5)));   // 75
+    print(area(Rect(3, 4)));  // 12
+}
