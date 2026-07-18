@@ -23,7 +23,7 @@ use writ_ast::{Block, Diagnostic, Expr, Item, Module, Stmt};
 #[must_use]
 pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
     // Each function's declared effects, in source order (deterministic output).
-    let declared: HashMap<&str, Vec<&str>> = module
+    let mut declared: HashMap<&str, Vec<&str>> = module
         .items
         .iter()
         .filter_map(|item| {
@@ -40,6 +40,11 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
             Some((f.signature.name.as_str(), effects))
         })
         .collect();
+    // Effectful built-ins are effect sites too — unless a user function shadows
+    // the name, in which case that signature wins.
+    for (name, effects) in crate::builtins::EFFECTFUL_BUILTINS {
+        declared.entry(name).or_insert_with(|| effects.to_vec());
+    }
 
     let mut diagnostics = Vec::new();
     for item in &module.items {

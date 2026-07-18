@@ -29,16 +29,16 @@ fn the_check_step_does_not_execute_the_program() {
 
 #[test]
 fn there_is_no_ambient_filesystem_authority() {
-    // No built-in opens files. An attempt is simply an unknown function — there
-    // is no I/O primitive for a program to reach, checked or not.
+    // `read_file` exists, but it is **capability-gated**, not ambient: a
+    // sandboxed `main` (no capability parameter) that reaches for it is refused
+    // statically — the honesty check (no `uses { Read }`) and the authority
+    // check (holds no `Cap<Read>`) both fire. So there is no ambient path to the
+    // filesystem, checked or run.
     let p = program("fn main() { read_file(\"/etc/passwd\"); }");
-    let codes: Vec<String> = writ_check::check_types(&p.modules["main"])
-        .iter()
-        .map(|d| d.code.clone())
-        .collect();
+    let codes: Vec<String> = writ_cli::check(&p).iter().map(|d| d.code.clone()).collect();
     assert!(
-        codes.contains(&"T0003".to_string()),
-        "unknown function, got {codes:?}"
+        codes.contains(&"E0101".to_string()) && codes.contains(&"E0301".to_string()),
+        "ambient file access must be refused by honesty + authority, got {codes:?}"
     );
     assert!(
         writ_cli::run(&p).is_err(),

@@ -22,8 +22,7 @@ use writ_ast::{
     BinaryOp, Block, Expr, Function, Literal, LiteralKind, Module, Span, Stmt, UnaryOp,
 };
 
-/// The name of the sole built-in for now. Kept tiny on purpose; the real stdlib
-/// (which threads capabilities through effectful built-ins) comes later.
+/// The `print` built-in — writes one line to the interpreter's output buffer.
 const PRINT: &str = "print";
 
 /// The capability-narrowing built-in: `grant<A>(cap)`.
@@ -262,6 +261,54 @@ impl<'m> Interpreter<'m> {
         }
     }
 
+    /// The file-I/O built-ins — the first genuinely effectful ones. They take a
+    /// capability of the matching authority (that the caller *held* it is proven
+    /// statically; at runtime the token carries no data and is not inspected) and
+    /// perform real I/O. `read_file(cap, path) -> Text`;
+    /// `write_file(cap, path, contents) -> Unit`.
+    fn builtin_io(&self, name: &str, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        let text = |v: &Value| -> Result<String, RuntimeError> {
+            match v {
+                Value::Text(s) => Ok(s.clone()),
+                other => Err(RuntimeError::new(
+                    span,
+                    format!(
+                        "`{name}` expects a `Text` argument, got {}",
+                        other.type_name()
+                    ),
+                )),
+            }
+        };
+        match name {
+            "read_file" => {
+                if args.len() != 2 {
+                    return Err(RuntimeError::new(
+                        span,
+                        format!("`read_file` expects 2 arguments, got {}", args.len()),
+                    ));
+                }
+                let path = text(&args[1])?;
+                let contents = std::fs::read_to_string(&path)
+                    .map_err(|e| RuntimeError::new(span, format!("read_file `{path}`: {e}")))?;
+                Ok(Value::Text(contents))
+            }
+            "write_file" => {
+                if args.len() != 3 {
+                    return Err(RuntimeError::new(
+                        span,
+                        format!("`write_file` expects 3 arguments, got {}", args.len()),
+                    ));
+                }
+                let path = text(&args[1])?;
+                let contents = text(&args[2])?;
+                std::fs::write(&path, contents)
+                    .map_err(|e| RuntimeError::new(span, format!("write_file `{path}`: {e}")))?;
+                Ok(Value::Unit)
+            }
+            _ => unreachable!("dispatched only for io built-ins"),
+        }
+    }
+
     /// The `print` built-in: emit one line per call. Requires exactly one
     /// argument.
     fn builtin_print(&self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
@@ -310,6 +357,9 @@ impl<'m> Interpreter<'m> {
         }
         if matches!(name, "concat" | "text_len" | "char_at" | "substring") {
             return self.builtin_text(name, args, span);
+        }
+        if matches!(name, "read_file" | "write_file") {
+            return self.builtin_io(name, args, span);
         }
         Err(RuntimeError::new(
             span,

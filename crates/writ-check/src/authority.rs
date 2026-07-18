@@ -40,7 +40,7 @@ fn granted_effect(ty: &TypeExpr) -> Option<&str> {
 #[must_use]
 pub fn check_authority(module: &Module) -> Vec<Diagnostic> {
     // Each function's declared effects, in source order.
-    let declared: HashMap<&str, Vec<&str>> = module
+    let mut declared: HashMap<&str, Vec<&str>> = module
         .items
         .iter()
         .filter_map(|item| {
@@ -57,6 +57,10 @@ pub fn check_authority(module: &Module) -> Vec<Diagnostic> {
             Some((f.signature.name.as_str(), effects))
         })
         .collect();
+    // A call to an effectful built-in is an effect site too (unless shadowed).
+    for (name, effects) in crate::builtins::EFFECTFUL_BUILTINS {
+        declared.entry(name).or_insert_with(|| effects.to_vec());
+    }
 
     let mut diagnostics = Vec::new();
     for item in &module.items {

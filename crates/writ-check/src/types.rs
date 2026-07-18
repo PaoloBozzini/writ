@@ -747,6 +747,57 @@ impl<'m> Checker<'m> {
         Some(ret)
     }
 
+    /// Type-check a file-I/O built-in, or return `None` if `name` is not one.
+    /// These are the first **effectful** built-ins: they take a capability of the
+    /// matching authority (checked here) — `read_file(Cap<Read>, Text) -> Text`,
+    /// `write_file(Cap<Write>, Text, Text) -> Unit`. Their effect (`Read` /
+    /// `Write`) is enforced by the honesty and authority passes.
+    fn check_io_builtin(
+        &mut self,
+        name: &str,
+        arg_types: &[Type],
+        args: &[Expr],
+        span: Span,
+    ) -> Option<Type> {
+        let cap = |authority: &str| Type::Named {
+            name: CAP.to_string(),
+            args: vec![Type::Named {
+                name: authority.to_string(),
+                args: Vec::new(),
+            }],
+        };
+        let (params, ret): (Vec<Type>, Type) = match name {
+            "read_file" => (vec![cap("Read"), Type::Text], Type::Text),
+            "write_file" => (vec![cap("Write"), Type::Text, Type::Text], Type::Unit),
+            _ => return None,
+        };
+        if arg_types.len() != params.len() {
+            self.error(
+                "T0004",
+                span,
+                format!(
+                    "`{name}` expects {} argument(s), found {}",
+                    params.len(),
+                    arg_types.len()
+                ),
+            );
+            return Some(ret);
+        }
+        for (i, (expected, actual)) in params.iter().zip(arg_types).enumerate() {
+            if !actual.compatible(expected) {
+                self.error(
+                    "T0001",
+                    args[i].span(),
+                    format!(
+                        "argument {} to `{name}`: expected `{expected}`, found `{actual}`",
+                        i + 1
+                    ),
+                );
+            }
+        }
+        Some(ret)
+    }
+
     /// Type-check `grant<A>(cap)`: narrow a broader capability to authority `A`.
     fn check_grant(
         &mut self,
@@ -877,6 +928,9 @@ impl<'m> Checker<'m> {
         // function of the same name.
         if !self.funcs.contains_key(name.as_str()) {
             if let Some(ty) = self.check_text_builtin(name, &arg_types, args, span) {
+                return ty;
+            }
+            if let Some(ty) = self.check_io_builtin(name, &arg_types, args, span) {
                 return ty;
             }
         }
