@@ -9,7 +9,7 @@ use writ_ast::diagnostics_to_json;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let (Some(command), Some(file)) = (args.get(1), args.get(2)) else {
-        eprintln!("usage: writ <check|run|build> <file.writ>");
+        eprintln!("usage: writ <check|run|build|verify> <file.writ>");
         return ExitCode::from(2);
     };
     let path = PathBuf::from(file);
@@ -30,8 +30,9 @@ fn main() -> ExitCode {
         "check" => check(&path, passes),
         "run" => run(&path),
         "build" => build(&path),
+        "verify" => verify(&path),
         other => {
-            eprintln!("unknown subcommand `{other}`; expected check | run | build");
+            eprintln!("unknown subcommand `{other}`; expected check | run | build | verify");
             ExitCode::from(2)
         }
     }
@@ -87,6 +88,24 @@ fn build(path: &std::path::Path) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Check, then run the **optional** SMT verification pass, printing any
+/// unproven-contract warnings. Warnings never block, so a clean or
+/// solver-less run exits successfully.
+fn verify(path: &std::path::Path) -> ExitCode {
+    let (program, mut diagnostics) = writ_cli::load_program(path);
+    diagnostics.extend(writ_cli::check(&program));
+    if diagnostics.iter().any(writ_ast::Diagnostic::is_error) {
+        return report(&diagnostics);
+    }
+    let (warnings, available) = writ_cli::verify(&program);
+    if !available {
+        eprintln!("writ verify: no SMT solver found (set $WRIT_SMT or install `z3`); skipping");
+        return ExitCode::SUCCESS;
+    }
+    // Only warnings here; report them but do not fail the build.
+    report(&warnings)
 }
 
 /// Print diagnostics (machine-readable JSON) and choose an exit code.

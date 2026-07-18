@@ -155,6 +155,23 @@ pub fn run(program: &Program) -> Result<Vec<String>, RuntimeError> {
     Ok(interp.output())
 }
 
+/// Statically verify a program's contracts with the bundled `z3`-CLI solver.
+///
+/// This is the **optional** SMT pass (issue #27): it returns only warnings and
+/// is never part of `check` / `run` / `build`, so it cannot block a program the
+/// runtime path accepts. Returns `(diagnostics, solver_available)`; when no
+/// solver is installed, the diagnostics are empty and the flag is `false`.
+#[must_use]
+pub fn verify(program: &Program) -> (Vec<Diagnostic>, bool) {
+    let solver = writ_verify::Z3Cli;
+    let available = writ_verify::Solver::available(&solver);
+    let mut diagnostics = Vec::new();
+    for module in program.modules.values() {
+        diagnostics.extend(writ_verify::verify(module, &solver));
+    }
+    (diagnostics, available)
+}
+
 /// Why a native build failed: a construct the back end cannot emit, an I/O
 /// problem, or the system C compiler rejecting the generated source.
 #[derive(Debug)]

@@ -47,10 +47,12 @@ graph TD
   interp[writ-interp] --> ast
   interp --> lower
   codegen[writ-codegen] --> ast
+  verify[writ-verify] --> ast
   cli[writ-cli] --> parser
   cli --> check
   cli --> lower
   cli --> codegen
+  cli --> verify
   cli --> interp
 ```
 
@@ -61,6 +63,7 @@ graph TD
 - **`writ-lower`** — a desugaring pass (AST → AST). Lowers contract clauses (`requires` / `ensures`) into the shared `Stmt::Check` form **once**, so every back end implements contract semantics in exactly one place. Depends on the AST only; runs after checking, before any back end.
 - **`writ-interp`** — a tree-walking evaluator over the AST. A back end, not the source of truth. Consumes the lowered AST.
 - **`writ-codegen`** — the native back end: emits **C** from the checked, lowered AST (`writ build` compiles it with the system C compiler). A back end, not the source of truth; it must agree with the interpreter on the differential corpus. Implements only the shared `Stmt::Check`, never `requires`/`ensures` directly.
+- **`writ-verify`** — the *optional* SMT static-verification pass (`writ verify`): translates contracts to SMT-LIB2 and discharges them for all inputs where it can, reporting unproven contracts as **warnings** before execution. The solver sits behind a small trait (a `z3`-CLI backend by default), so the default build needs no solver installed and the pass never blocks the runtime path.
 - **`writ-cli`** — a *thin* driver. Wiring only; no language logic lives here.
 
 **Invariants — a change that breaks one of these is wrong, not clever:**
