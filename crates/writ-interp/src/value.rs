@@ -10,6 +10,12 @@ pub enum Value {
     Int(i64),
     Bool(bool),
     Text(String),
+    /// A sum-type value: a variant name and its positional payload, e.g.
+    /// `Some(3)` or `None`.
+    Variant {
+        name: String,
+        fields: Vec<Value>,
+    },
     /// The value of a statement or a function with no return value.
     Unit,
 }
@@ -22,6 +28,7 @@ impl Value {
             Value::Int(_) => "Int",
             Value::Bool(_) => "Bool",
             Value::Text(_) => "Text",
+            Value::Variant { .. } => "variant",
             Value::Unit => "Unit",
         }
     }
@@ -34,6 +41,17 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Text(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
+            Value::Variant { name, fields } => {
+                write!(f, "{name}")?;
+                if let Some((first, rest)) = fields.split_first() {
+                    write!(f, "({first}")?;
+                    for field in rest {
+                        write!(f, ", {field}")?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
         }
     }
 }

@@ -71,6 +71,10 @@ pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, Runt
 /// authority and values flow only through explicit call arguments.
 pub struct Interpreter<'m> {
     funcs: HashMap<&'m str, &'m Function>,
+    /// Sum-type constructors declared by the module: variant name → arity. Used
+    /// to evaluate constructor expressions and to classify bare-identifier
+    /// patterns as nullary variants.
+    constructors: HashMap<&'m str, usize>,
     /// Output collected from the `print` built-in, one entry per call. Held here
     /// rather than written to ambient stdout so evaluation is deterministic and
     /// testable — and so effects stay local to an interpreter instance.
@@ -85,21 +89,27 @@ impl<'m> Interpreter<'m> {
     /// program the interpreter refuses rather than silently resolving.
     pub fn new(module: &'m Module) -> Result<Self, RuntimeError> {
         let mut funcs = HashMap::new();
+        let mut constructors = HashMap::new();
         for item in &module.items {
-            // Type declarations carry no runtime behaviour of their own; their
-            // constructors and `match` are handled where values are evaluated.
-            let writ_ast::Item::Function(f) = item else {
-                continue;
-            };
-            if funcs.insert(f.signature.name.as_str(), f).is_some() {
-                return Err(RuntimeError::new(
-                    f.signature.span,
-                    format!("function `{}` is defined more than once", f.signature.name),
-                ));
+            match item {
+                writ_ast::Item::Function(f) => {
+                    if funcs.insert(f.signature.name.as_str(), f).is_some() {
+                        return Err(RuntimeError::new(
+                            f.signature.span,
+                            format!("function `{}` is defined more than once", f.signature.name),
+                        ));
+                    }
+                }
+                writ_ast::Item::Type(decl) => {
+                    for variant in &decl.variants {
+                        constructors.insert(variant.name.as_str(), variant.fields.len());
+                    }
+                }
             }
         }
         Ok(Self {
             funcs,
+            constructors,
             output: RefCell::new(Vec::new()),
         })
     }
@@ -109,6 +119,7 @@ impl<'m> Interpreter<'m> {
     pub fn empty() -> Self {
         Self {
             funcs: HashMap::new(),
+            constructors: HashMap::new(),
             output: RefCell::new(Vec::new()),
         }
     }
@@ -297,9 +308,23 @@ impl<'m> Interpreter<'m> {
                 right,
                 span,
             } => self.eval_binary(*op, left, right, *span, env),
-            Expr::Identifier { name, span } => env
-                .lookup(name)
-                .ok_or_else(|| RuntimeError::new(*span, format!("unbound variable `{name}`"))),
+            Expr::Identifier { name, span } => {
+                if let Some(value) = env.lookup(name) {
+                    return Ok(value);
+                }
+                // A bare name that is a nullary constructor (e.g. `None`) builds
+                // its variant value.
+                if self.constructors.get(name.as_str()) == Some(&0) {
+                    return Ok(Value::Variant {
+                        name: name.clone(),
+                        fields: Vec::new(),
+                    });
+                }
+                Err(RuntimeError::new(
+                    *span,
+                    format!("unbound variable `{name}`"),
+                ))
+            }
             Expr::Call { callee, args, span } => {
                 let Expr::Identifier { name, .. } = callee.as_ref() else {
                     return Err(RuntimeError::new(
@@ -311,12 +336,75 @@ impl<'m> Interpreter<'m> {
                 for arg in args {
                     values.push(self.eval_expr_in(arg, env)?);
                 }
+                // A call to a constructor builds a variant value; otherwise it is
+                // an ordinary function or built-in call.
+                if let Some(&arity) = self.constructors.get(name.as_str()) {
+                    if values.len() != arity {
+                        return Err(RuntimeError::new(
+                            *span,
+                            format!(
+                                "constructor `{name}` expects {arity} argument(s), got {}",
+                                values.len()
+                            ),
+                        ));
+                    }
+                    return Ok(Value::Variant {
+                        name: name.clone(),
+                        fields: values,
+                    });
+                }
                 self.call_by_name(name, values, *span)
             }
-            Expr::Match { span, .. } => Err(RuntimeError::new(
-                *span,
-                "`match` is not evaluated by the interpreter yet",
-            )),
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => {
+                let value = self.eval_expr_in(scrutinee, env)?;
+                for arm in arms {
+                    env.push_scope();
+                    if self.try_match(&arm.pattern, &value, env) {
+                        let result = self.eval_expr_in(&arm.body, env);
+                        env.pop_scope();
+                        return result;
+                    }
+                    env.pop_scope();
+                }
+                Err(RuntimeError::new(
+                    *span,
+                    format!("no match arm covers the value `{value}`"),
+                ))
+            }
+        }
+    }
+
+    /// Try to match `pattern` against `value`, binding any captured names into
+    /// the current scope. Returns whether it matched. A bare identifier is a
+    /// nullary-variant test if it names a constructor, otherwise a binding.
+    fn try_match(&self, pattern: &writ_ast::Pattern, value: &Value, env: &mut Env) -> bool {
+        use writ_ast::Pattern;
+        match pattern {
+            Pattern::Wildcard { .. } => true,
+            Pattern::Ident { name, .. } => {
+                if self.constructors.get(name.as_str()) == Some(&0) {
+                    matches!(value, Value::Variant { name: v, fields } if v == name && fields.is_empty())
+                } else {
+                    // A binding pattern always matches and captures the value.
+                    let _ = env.define(name, value.clone(), false);
+                    true
+                }
+            }
+            Pattern::Variant { name, args, .. } => {
+                let Value::Variant { name: v, fields } = value else {
+                    return false;
+                };
+                if v != name || fields.len() != args.len() {
+                    return false;
+                }
+                args.iter()
+                    .zip(fields)
+                    .all(|(sub, val)| self.try_match(sub, val, env))
+            }
         }
     }
 
@@ -459,6 +547,26 @@ fn equal(l: &Value, r: &Value, span: Span) -> Result<bool, RuntimeError> {
         (Value::Int(a), Value::Int(b)) => Ok(a == b),
         (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
         (Value::Text(a), Value::Text(b)) => Ok(a == b),
+        (
+            Value::Variant {
+                name: a,
+                fields: fa,
+            },
+            Value::Variant {
+                name: b,
+                fields: fb,
+            },
+        ) => {
+            if a != b || fa.len() != fb.len() {
+                return Ok(false);
+            }
+            for (x, y) in fa.iter().zip(fb) {
+                if !equal(x, y, span)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         _ => Err(RuntimeError::new(
             span,
             format!("cannot compare {} with {}", l.type_name(), r.type_name()),
@@ -700,6 +808,72 @@ fn main() {
             interp.output(),
             vec!["a".to_string(), "3".to_string(), "true".to_string()]
         );
+    }
+
+    // --- sum types: runtime match (#14) ------------------------------------
+
+    #[test]
+    fn match_dispatches_on_the_variant_and_binds_payload() {
+        let src = "\
+type Option = Some(Int) | None
+fn unwrap_or(o: Option, fallback: Int) -> Int {
+    return match o {
+        Some(x) => x,
+        None    => fallback,
+    };
+}
+fn some_case() -> Int { return unwrap_or(Some(7), 0); }
+fn none_case() -> Int { return unwrap_or(None, 42); }
+";
+        assert_eq!(
+            run_program(src, "some_case", vec![]).unwrap(),
+            Value::Int(7)
+        );
+        assert_eq!(
+            run_program(src, "none_case", vec![]).unwrap(),
+            Value::Int(42)
+        );
+    }
+
+    #[test]
+    fn wildcard_and_binding_patterns_match() {
+        let src = "\
+type Color = Red | Green | Blue
+fn code(c: Color) -> Int {
+    return match c {
+        Red => 1,
+        other => 0,
+    };
+}
+fn red() -> Int { return code(Red); }
+fn blue() -> Int { return code(Blue); }
+";
+        assert_eq!(run_program(src, "red", vec![]).unwrap(), Value::Int(1));
+        // Green/Blue fall through to the `other` binding arm.
+        assert_eq!(run_program(src, "blue", vec![]).unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn constructor_arity_mismatch_is_a_runtime_error() {
+        let src = "\
+type Pair = Pair(Int, Int)
+fn f() -> Int { return match Pair(1) { Pair(a, b) => a, _ => 0 }; }
+";
+        let e = run_program(src, "f", vec![]).unwrap_err();
+        assert!(e.message.contains("expects 2"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_value_matching_no_arm_is_a_runtime_error() {
+        // No wildcard, and Blue is not covered — detected at evaluation (static
+        // exhaustiveness is #17).
+        let src = "\
+type Color = Red | Green | Blue
+fn code(c: Color) -> Int { return match c { Red => 1, Green => 2 }; }
+fn f() -> Int { return code(Blue); }
+";
+        let e = run_program(src, "f", vec![]).unwrap_err();
+        assert!(e.message.contains("no match arm"), "{}", e.message);
     }
 
     // --- contracts: runtime checking with blame (#26) ----------------------
