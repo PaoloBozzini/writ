@@ -26,6 +26,9 @@
 
 use writ_ast::{Blame, Block, Expr, Function, Item, Module, Stmt};
 
+mod link;
+pub use link::link;
+
 /// Desugar every function's contracts into [`Stmt::Check`] statements, returning
 /// a new module. Non-function items and imports are preserved unchanged.
 #[must_use]
