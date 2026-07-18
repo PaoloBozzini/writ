@@ -72,6 +72,27 @@ fn main() { print(f(None)); }
 }
 
 #[test]
+fn capabilities_emit() {
+    // `grant<A>(cap)` becomes a tagged capability; a `Cap` main parameter is
+    // handed the root capability by the C entry point.
+    let m = lower_src(
+        "\
+fn write_line(out: Cap<Write>, msg: Text) uses { Write } { return; }
+fn main(root: Cap<Root>) uses { Write } { write_line(grant<Write>(root), \"hi\"); }
+",
+    );
+    let c = emit_c(&m).expect("capabilities emit");
+    assert!(
+        c.contains("w_cap(\"Write\")"),
+        "grant narrows to a tagged cap: {c}"
+    );
+    assert!(
+        c.contains("w_cap(\"Root\")"),
+        "main receives the root capability: {c}"
+    );
+}
+
+#[test]
 fn emission_is_deterministic() {
     // Codegen is a pure function of the AST: identical input → identical bytes.
     // (Guards against hash-map iteration order or other nondeterminism leaking
