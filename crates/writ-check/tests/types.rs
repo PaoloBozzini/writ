@@ -127,6 +127,96 @@ fn unknown_function_is_reported() {
     assert_eq!(cs, vec!["T0003"]);
 }
 
+// --- Sum types + exhaustiveness (#17) -------------------------------------
+
+#[test]
+fn exhaustive_match_type_checks() {
+    assert_ok(
+        "\
+type Option = Some(Int) | None
+fn unwrap_or(o: Option, fallback: Int) -> Int {
+    return match o {
+        Some(x) => x,
+        None    => fallback,
+    };
+}
+",
+    );
+}
+
+#[test]
+fn a_wildcard_makes_a_match_exhaustive() {
+    assert_ok(
+        "\
+type Color = Red | Green | Blue
+fn code(c: Color) -> Int {
+    return match c {
+        Red => 1,
+        _   => 0,
+    };
+}
+",
+    );
+}
+
+#[test]
+fn non_exhaustive_match_is_rejected_at_compile_time() {
+    let cs = codes(
+        "\
+type Color = Red | Green | Blue
+fn code(c: Color) -> Int {
+    return match c {
+        Red   => 1,
+        Green => 2,
+    };
+}
+",
+    );
+    assert_eq!(cs, vec!["T0006"], "Blue is uncovered");
+}
+
+#[test]
+fn non_exhaustive_diagnostic_names_the_missing_variant() {
+    let parsed = writ_parser::parse(
+        "\
+type Color = Red | Green | Blue
+fn code(c: Color) -> Int { return match c { Red => 1 }; }
+",
+    );
+    let diags = writ_check::check_types(&parsed.module);
+    let d = diags
+        .iter()
+        .find(|d| d.code == "T0006")
+        .expect("a non-exhaustive diagnostic");
+    assert!(d.message.contains("`Green`"), "{}", d.message);
+    assert!(d.message.contains("`Blue`"), "{}", d.message);
+}
+
+#[test]
+fn constructor_arity_mismatch_is_rejected() {
+    let cs = codes("type Pair = Pair(Int, Int)\nfn f() -> Pair { return Pair(1); }");
+    assert_eq!(cs, vec!["T0004"]);
+}
+
+#[test]
+fn match_arms_must_agree_on_a_type() {
+    let cs = codes(
+        "\
+type Option = Some(Int) | None
+fn f(o: Option) -> Int {
+    return match o {
+        Some(x) => 1,
+        None    => true,
+    };
+}
+",
+    );
+    assert!(
+        cs.contains(&"T0001".to_string()),
+        "expected a type mismatch, got {cs:?}"
+    );
+}
+
 #[test]
 fn diagnostics_are_deterministic() {
     let src = "fn f() { let x: Int = true; if 1 { return; } }";
