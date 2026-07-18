@@ -246,6 +246,107 @@ fn f(o: Option) -> Int {
     );
 }
 
+// --- Generic instantiation of variant payloads (#78) -----------------------
+
+#[test]
+fn generic_constructor_infers_type_argument() {
+    // `Some(3)` is `Option<Int>`; `Some("x")` is `Option<Text>`.
+    assert_ok(
+        "\
+type Option<T> = Some(T) | None
+fn f() {
+    let a: Option<Int>  = Some(3);
+    let b: Option<Text> = Some(\"x\");
+}
+",
+    );
+}
+
+#[test]
+fn nullary_generic_constructor_is_polymorphic() {
+    // `None` has no field to fix `T`, so it fits any `Option<_>`.
+    assert_ok(
+        "\
+type Option<T> = Some(T) | None
+fn f() {
+    let a: Option<Int>  = None;
+    let b: Option<Text> = None;
+}
+",
+    );
+}
+
+#[test]
+fn generic_constructor_with_wrong_payload_is_rejected() {
+    // `Some(\"x\")` is `Option<Text>`, not the annotated `Option<Int>`.
+    let cs = codes(
+        "\
+type Option<T> = Some(T) | None
+fn f() {
+    let a: Option<Int> = Some(\"x\");
+}
+",
+    );
+    assert_eq!(cs, vec!["T0001"], "Option<Text> is not Option<Int>");
+}
+
+#[test]
+fn concrete_variant_payload_type_is_checked() {
+    // Non-generic payload: `W(Int)` given a `Text` must be refused.
+    let cs = codes("type Wrap = W(Int)\nfn f() -> Wrap { return W(\"x\"); }");
+    assert_eq!(cs, vec!["T0001"], "W expects an Int payload");
+}
+
+#[test]
+fn match_binds_payload_at_instantiated_type() {
+    // In `match o { Some(x) => .. }` with `o: Option<Int>`, `x` is `Int`.
+    assert_ok(
+        "\
+type Option<T> = Some(T) | None
+fn unwrap_or(o: Option<Int>, fallback: Int) -> Int {
+    return match o {
+        Some(x) => x,
+        None    => fallback,
+    };
+}
+",
+    );
+}
+
+#[test]
+fn match_payload_binding_is_not_opaque() {
+    // `x` is precisely `Int`, so returning it where `Text` is expected fails.
+    // An opaque binding would silently type-check.
+    let cs = codes(
+        "\
+type Option<T> = Some(T) | None
+fn f(o: Option<Int>) -> Text {
+    return match o {
+        Some(x) => x,
+        None    => \"n\",
+    };
+}
+",
+    );
+    assert!(
+        cs.contains(&"T0001".to_string()),
+        "Int payload must not unify with Text, got {cs:?}"
+    );
+}
+
+#[test]
+fn mismatched_generic_argument_is_rejected_at_a_call() {
+    // Passing `Option<Int>` where `Option<Text>` is required must be refused.
+    let cs = codes(
+        "\
+type Option<T> = Some(T) | None
+fn need(o: Option<Text>) {}
+fn f() { need(Some(3)); }
+",
+    );
+    assert_eq!(cs, vec!["T0001"], "Option<Int> is not Option<Text>");
+}
+
 #[test]
 fn diagnostics_are_deterministic() {
     let src = "fn f() { let x: Int = true; if 1 { return; } }";

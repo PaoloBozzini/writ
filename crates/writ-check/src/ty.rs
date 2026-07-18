@@ -27,6 +27,10 @@ pub enum Type {
     /// A placeholder for an already-reported error, so a single mistake does not
     /// cascade into a flood of follow-on diagnostics.
     Error,
+    /// An as-yet-undetermined generic argument — e.g. the `T` in `None`'s
+    /// `Option<T>`, which no field fixes. It unifies with any type, so a
+    /// nullary constructor stays polymorphic without a full inference engine.
+    Infer,
 }
 
 impl Type {
@@ -46,11 +50,20 @@ impl Type {
     }
 
     /// Whether two types are compatible. There are **no implicit coercions**, so
-    /// this is exact equality — except that [`Type::Error`] is compatible with
-    /// anything, to avoid cascading diagnostics after a first error.
+    /// this is structural equality — with two wildcards that match anything:
+    /// [`Type::Error`] (to avoid cascading diagnostics after a first error) and
+    /// [`Type::Infer`] (an undetermined generic argument). Named types match
+    /// head-and-arity and recurse into their arguments, so `Option<Int>` is
+    /// incompatible with `Option<Text>` but compatible with `Option<_>`.
     #[must_use]
     pub fn compatible(&self, other: &Type) -> bool {
-        matches!(self, Type::Error) || matches!(other, Type::Error) || self == other
+        match (self, other) {
+            (Type::Error | Type::Infer, _) | (_, Type::Error | Type::Infer) => true,
+            (Type::Named { name: n1, args: a1 }, Type::Named { name: n2, args: a2 }) => {
+                n1 == n2 && a1.len() == a2.len() && a1.iter().zip(a2).all(|(x, y)| x.compatible(y))
+            }
+            _ => self == other,
+        }
     }
 }
 
@@ -62,6 +75,7 @@ impl fmt::Display for Type {
             Type::Text => write!(f, "Text"),
             Type::Unit => write!(f, "Unit"),
             Type::Error => write!(f, "<error>"),
+            Type::Infer => write!(f, "_"),
             Type::Named { name, args } => {
                 write!(f, "{name}")?;
                 if let Some((first, rest)) = args.split_first() {
