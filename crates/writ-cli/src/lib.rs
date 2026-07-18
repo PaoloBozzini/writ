@@ -122,8 +122,11 @@ pub fn check_passes(program: &Program, passes: &[String]) -> Vec<Diagnostic> {
 /// Returns a [`RuntimeError`] if there is no `main`, or execution fails.
 pub fn run(program: &Program) -> Result<Vec<String>, RuntimeError> {
     let linked = link(program);
-    let interp = Interpreter::new(&linked)?;
-    let main = linked
+    // Desugar contracts into shared `Check` nodes (the one place contract
+    // semantics live) before handing the program to a back end.
+    let lowered = writ_lower::lower(&linked);
+    let interp = Interpreter::new(&lowered)?;
+    let main = lowered
         .items
         .iter()
         .find_map(|it| match it {
@@ -236,6 +239,15 @@ fn rewrite_stmt(stmt: &Stmt, module: &str, local_fns: &BTreeSet<&str>, is_root: 
             else_block: else_block
                 .as_ref()
                 .map(|b| rewrite_block(b, module, local_fns, is_root)),
+            span: *span,
+        },
+        Stmt::Check {
+            predicate,
+            blame,
+            span,
+        } => Stmt::Check {
+            predicate: re(predicate),
+            blame: *blame,
             span: *span,
         },
     }

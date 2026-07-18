@@ -1,0 +1,14 @@
+[package]
+name = "writ-lower"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+writ-ast.workspace = true
+
+[dev-dependencies]
+# Test-only: parse real source so the lowering tests operate on the exact tree
+# the parser produces. Keeps the crate graph acyclic (parser never depends here).
+writ-parser.workspace = true

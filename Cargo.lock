@@ -21,6 +21,7 @@ dependencies = [
  "writ-ast",
  "writ-check",
  "writ-interp",
+ "writ-lower",
  "writ-parser",
 ]
 
@@ -29,6 +30,7 @@ name = "writ-interp"
 version = "0.0.0"
 dependencies = [
  "writ-ast",
+ "writ-lower",
  "writ-parser",
 ]
 
@@ -37,6 +39,14 @@ name = "writ-lexer"
 version = "0.0.0"
 dependencies = [
  "writ-ast",
+]
+
+[[package]]
+name = "writ-lower"
+version = "0.0.0"
+dependencies = [
+ "writ-ast",
+ "writ-parser",
 ]
 
 [[package]]

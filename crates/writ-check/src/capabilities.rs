@@ -111,7 +111,9 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
                 ));
             }
         }
-        Stmt::Return { value: None, .. } | Stmt::Expr(_) => {}
+        // A lowered contract predicate is a pure boolean expression: it cannot
+        // bind, return, or otherwise let a capability escape.
+        Stmt::Return { value: None, .. } | Stmt::Expr(_) | Stmt::Check { .. } => {}
         Stmt::If {
             then_block,
             else_block,

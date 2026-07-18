@@ -5,6 +5,7 @@ members = [
     "crates/writ-lexer",
     "crates/writ-parser",
     "crates/writ-check",
+    "crates/writ-lower",
     "crates/writ-interp",
     "crates/writ-cli",
 ]
@@ -22,4 +23,5 @@ writ-ast = { path = "crates/writ-ast" }
 writ-lexer = { path = "crates/writ-lexer" }
 writ-parser = { path = "crates/writ-parser" }
 writ-check = { path = "crates/writ-check" }
+writ-lower = { path = "crates/writ-lower" }
 writ-interp = { path = "crates/writ-interp" }

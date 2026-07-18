@@ -43,9 +43,12 @@ graph TD
   parser[writ-parser] --> lexer
   parser --> ast
   check[writ-check] --> ast
+  lower[writ-lower] --> ast
   interp[writ-interp] --> ast
+  interp --> lower
   cli[writ-cli] --> parser
   cli --> check
+  cli --> lower
   cli --> interp
 ```
 
@@ -53,7 +56,8 @@ graph TD
 - **`writ-lexer`** — text → tokens. Carries spans.
 - **`writ-parser`** — tokens → AST. Includes signature parsing for `uses {...}`, `requires`, `ensures`.
 - **`writ-check`** — all static analysis: type checker, effect system, capability authority checker, contract checker. Depends on the AST, **never on the interpreter**.
-- **`writ-interp`** — a tree-walking evaluator over the AST. A back end, not the source of truth.
+- **`writ-lower`** — a desugaring pass (AST → AST). Lowers contract clauses (`requires` / `ensures`) into the shared `Stmt::Check` form **once**, so every back end implements contract semantics in exactly one place. Depends on the AST only; runs after checking, before any back end.
+- **`writ-interp`** — a tree-walking evaluator over the AST. A back end, not the source of truth. Consumes the lowered AST.
 - **`writ-cli`** — a *thin* driver. Wiring only; no language logic lives here.
 
 **Invariants — a change that breaks one of these is wrong, not clever:**

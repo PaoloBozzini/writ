@@ -139,6 +139,7 @@ fn collect_members_block<'a>(block: &'a Block, out: &mut Vec<(&'a str, &'a str, 
             Stmt::Expr(e) => collect_members_expr(e, out),
             Stmt::Return { value: Some(e), .. } => collect_members_expr(e, out),
             Stmt::Return { value: None, .. } => {}
+            Stmt::Check { predicate, .. } => collect_members_expr(predicate, out),
             Stmt::If {
                 cond,
                 then_block,

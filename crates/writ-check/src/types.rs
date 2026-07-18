@@ -317,6 +317,21 @@ impl<'m> Checker<'m> {
                     self.check_block(else_block);
                 }
             }
+            // A lowered contract check; its predicate must be `Bool`. The parser
+            // never produces this, but the type checker stays total so it can
+            // run on a lowered module too.
+            Stmt::Check {
+                predicate, span, ..
+            } => {
+                let ty = self.check_expr(predicate);
+                if !ty.compatible(&Type::Bool) {
+                    self.error(
+                        "T0007",
+                        *span,
+                        format!("check predicate must be `Bool`, found `{ty}`"),
+                    );
+                }
+            }
         }
     }
 

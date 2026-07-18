@@ -17,4 +17,5 @@ path = "src/main.rs"
 writ-ast.workspace = true
 writ-parser.workspace = true
 writ-check.workspace = true
+writ-lower.workspace = true
 writ-interp.workspace = true
