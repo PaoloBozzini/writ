@@ -14,8 +14,20 @@ fn main() -> ExitCode {
     };
     let path = PathBuf::from(file);
 
+    // Any arguments after the file select individual check passes.
+    let passes = &args[3.min(args.len())..];
+    for p in passes {
+        if !writ_cli::PASSES.contains(&p.as_str()) {
+            eprintln!(
+                "unknown pass `{p}`; expected one of: {}",
+                writ_cli::PASSES.join(", ")
+            );
+            return ExitCode::from(2);
+        }
+    }
+
     match command.as_str() {
-        "check" => check(&path),
+        "check" => check(&path, passes),
         "run" => run(&path),
         "build" => {
             // Native code generation is a later milestone (M6); there is no
@@ -30,10 +42,11 @@ fn main() -> ExitCode {
     }
 }
 
-/// Load + statically check a program, printing diagnostics as canonical JSON.
-fn check(path: &std::path::Path) -> ExitCode {
+/// Load + statically check a program (optionally only the named passes),
+/// printing diagnostics as canonical JSON.
+fn check(path: &std::path::Path, passes: &[String]) -> ExitCode {
     let (program, mut diagnostics) = writ_cli::load_program(path);
-    diagnostics.extend(writ_cli::check(&program));
+    diagnostics.extend(writ_cli::check_passes(&program, passes));
     report(&diagnostics)
 }
 
