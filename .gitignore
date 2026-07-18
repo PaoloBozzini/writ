@@ -6,8 +6,11 @@
 # Backtrace / debug output
 rust-toolchain-*.tar.gz
 
-# Local editor / agent tooling (not part of the project)
-/.claude/
+# Local editor / agent tooling (not part of the project) — but keep the
+# command files (`/.claude/commands/`) version-controlled so edits to them go
+# through review.
+/.claude/*
+!/.claude/commands/
 
 # VS Code extension build artifacts
 editors/vscode/*.vsix
