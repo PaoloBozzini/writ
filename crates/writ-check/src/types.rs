@@ -148,29 +148,6 @@ struct CtorInfo<'m> {
     fields: &'m [TypeExpr],
 }
 
-/// The type `Tainted<Text>`.
-fn tainted_text() -> Type {
-    Type::Named {
-        name: TAINTED.to_string(),
-        args: vec![Type::Text],
-    }
-}
-
-/// Whether `t` is a *textual* type (`Text` or `Tainted<Text>`), and if so whether
-/// it is tainted. `None` means it is neither. `Error` / `Infer` are treated as
-/// clean text to avoid cascading after an earlier error.
-fn textual_taint(t: &Type) -> Option<bool> {
-    match t {
-        Type::Text | Type::Error | Type::Infer => Some(false),
-        Type::Named { name, args }
-            if name == TAINTED && args.len() == 1 && args[0] == Type::Text =>
-        {
-            Some(true)
-        }
-        _ => None,
-    }
-}
-
 /// Resolve a variant field's syntactic type, replacing any generic parameter
 /// with its inferred substitution (or [`Type::Infer`] when nothing fixed it).
 fn resolve_field(texpr: &TypeExpr, generics: &[String], subst: &HashMap<String, Type>) -> Type {
@@ -736,40 +713,15 @@ impl<'m> Checker<'m> {
         args: &[Expr],
         span: Span,
     ) -> Option<Type> {
-        // A `Textual` parameter accepts either `Text` or `Tainted<Text>`, so
-        // untrusted data can be *inspected* (validated) — and a `Textual` result
-        // stays tainted if any textual argument was, so slicing cannot launder
-        // taint. `text_len` / `char_code` return `Int` (not tracked), and
-        // `code_char` builds fresh `Text` from a code point.
-        #[derive(Clone, Copy, PartialEq)]
-        enum Arg {
-            Int,
-            Textual,
-        }
-        enum Ret {
-            Int,
-            Text,
-            Textual,
-        }
-        let (params, ret): (Vec<Arg>, Ret) = match name {
-            "concat" => (vec![Arg::Textual, Arg::Textual], Ret::Textual),
-            "text_len" => (vec![Arg::Textual], Ret::Int),
-            "char_at" => (vec![Arg::Textual, Arg::Int], Ret::Textual),
-            "substring" => (vec![Arg::Textual, Arg::Int, Arg::Int], Ret::Textual),
-            "char_code" => (vec![Arg::Textual], Ret::Int),
-            "code_char" => (vec![Arg::Int], Ret::Text),
+        let (params, ret): (Vec<Type>, Type) = match name {
+            "concat" => (vec![Type::Text, Type::Text], Type::Text),
+            "text_len" => (vec![Type::Text], Type::Int),
+            "char_at" => (vec![Type::Text, Type::Int], Type::Text),
+            "substring" => (vec![Type::Text, Type::Int, Type::Int], Type::Text),
+            "char_code" => (vec![Type::Text], Type::Int),
+            "code_char" => (vec![Type::Int], Type::Text),
             _ => return None,
         };
-
-        let result = |any_tainted: bool| -> Type {
-            match ret {
-                Ret::Int => Type::Int,
-                Ret::Text => Type::Text,
-                Ret::Textual if any_tainted => tainted_text(),
-                Ret::Textual => Type::Text,
-            }
-        };
-
         if arg_types.len() != params.len() {
             self.error(
                 "T0004",
@@ -780,35 +732,21 @@ impl<'m> Checker<'m> {
                     arg_types.len()
                 ),
             );
-            return Some(result(false));
+            return Some(ret);
         }
-
-        let mut any_tainted = false;
-        for (i, (kind, actual)) in params.iter().zip(arg_types).enumerate() {
-            match kind {
-                Arg::Int => {
-                    if !actual.compatible(&Type::Int) {
-                        self.error(
-                            "T0001",
-                            args[i].span(),
-                            format!("argument {} to `{name}`: expected `Int`, found `{actual}`", i + 1),
-                        );
-                    }
-                }
-                Arg::Textual => match textual_taint(actual) {
-                    Some(tainted) => any_tainted = any_tainted || tainted,
-                    None => self.error(
-                        "T0001",
-                        args[i].span(),
-                        format!(
-                            "argument {} to `{name}`: expected `Text` or `Tainted<Text>`, found `{actual}`",
-                            i + 1
-                        ),
+        for (i, (expected, actual)) in params.iter().zip(arg_types).enumerate() {
+            if !actual.compatible(expected) {
+                self.error(
+                    "T0001",
+                    args[i].span(),
+                    format!(
+                        "argument {} to `{name}`: expected `{expected}`, found `{actual}`",
+                        i + 1
                     ),
-                },
+                );
             }
         }
-        Some(result(any_tainted))
+        Some(ret)
     }
 
     /// Type-check a file-I/O built-in, or return `None` if `name` is not one.

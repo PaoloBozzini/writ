@@ -102,31 +102,21 @@ impl TaintChecker<'_> {
     fn is_tainted(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Identifier { name, .. } => self.is_tainted_name(name),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, .. } => {
                 let Expr::Identifier { name, .. } = callee.as_ref() else {
                     // A cross-module (`Expr::Member`) callee's taint is decided
                     // once linking makes it a qualified identifier; here, treat
                     // an unresolved callee as untainted.
                     return false;
                 };
-                if name == SANITIZE {
-                    return false;
-                }
-                // The text-returning built-ins **propagate** taint from their
-                // textual argument(s): slicing or joining untrusted data keeps it
-                // untrusted. `text_len` / `char_code` (→ `Int`) and `code_char`
-                // (fresh text) do not. Any other function taints only if it is
-                // declared to return `Tainted<T>`.
-                match name.as_str() {
-                    "char_at" | "substring" => args.first().is_some_and(|a| self.is_tainted(a)),
-                    "concat" => args.iter().any(|a| self.is_tainted(a)),
-                    "text_len" | "char_code" | "code_char" => false,
-                    _ => self
+                // `sanitize` strips taint; another function taints only if it is
+                // declared to return `Tainted<T>` — independent of its arguments.
+                name != SANITIZE
+                    && self
                         .returns_tainted
                         .get(name.as_str())
                         .copied()
-                        .unwrap_or(false),
-                }
+                        .unwrap_or(false)
             }
             // A `match` result is tainted if any arm it could pick is tainted.
             Expr::Match { arms, .. } => arms.iter().any(|a| self.is_tainted(&a.body)),

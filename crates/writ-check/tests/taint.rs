@@ -143,24 +143,3 @@ fn handle(input: Tainted<Int>) uses { Query } {
     );
     assert_eq!(cs, vec!["E0401"], "operators must not launder taint");
 }
-
-// --- Taint propagates through text built-ins (#135) -----------------------
-
-#[test]
-fn a_sliced_tainted_value_still_reaches_a_sink() {
-    // `char_at` keeps taint, so a sliced character passed to a sink is E0401.
-    let cs = taint_codes(
-        "fn run_query(q: Tainted<Text>) uses { Query } { return; }\n\
-         fn handle(input: Tainted<Text>) uses { Query } { run_query(char_at(input, 0)); }",
-    );
-    assert_eq!(cs, vec!["E0401"]);
-}
-
-#[test]
-fn concat_carries_taint_to_a_sink() {
-    let cs = taint_codes(
-        "fn run_query(q: Tainted<Text>) uses { Query } { return; }\n\
-         fn handle(input: Tainted<Text>) uses { Query } { run_query(concat(input, input)); }",
-    );
-    assert_eq!(cs, vec!["E0401"]);
-}
