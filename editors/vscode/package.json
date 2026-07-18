@@ -2,7 +2,7 @@
   "name": "writ-lang",
   "displayName": "Writ Language",
   "description": "Syntax highlighting and file icons for the Writ programming language.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "writ",
   "license": "MIT",
   "repository": {
