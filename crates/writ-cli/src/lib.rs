@@ -196,10 +196,19 @@ fn c_compiler() -> String {
 
 /// Compile a checked program to a standalone native binary at `out_path`.
 ///
+/// The build is **hermetic and deterministic** (issue #30): the whole pipeline
+/// is one command from source to binary, and identical source yields
+/// byte-identical output. Determinism holds because
+///
+/// - codegen is a pure function of the AST — items are emitted in module order
+///   with no clock, RNG, hash-map iteration, or ambient input; and
+/// - the C compiler is invoked with reproducible flags and a `-ffile-prefix-map`
+///   that strips the (volatile) build directory, so the binary does not embed
+///   where it was built.
+///
 /// The pipeline is: link the modules, lower contracts into shared `Check`
-/// nodes, emit C, then hand the C to the system compiler. The generated C is
-/// written beside the binary (`out_path` with a `.c` extension) so it can be
-/// inspected. Returns the path to the emitted C source.
+/// nodes, emit C beside the binary (`out_path` with a `.c` extension), then hand
+/// the C to the system compiler. Returns the path to the emitted C source.
 ///
 /// # Errors
 /// Returns a [`BuildError`] if codegen rejects a construct, file I/O fails, or
@@ -210,14 +219,18 @@ pub fn build(program: &Program, out_path: &Path) -> Result<PathBuf, BuildError> 
     let c_src = writ_codegen::emit_c(&lowered).map_err(BuildError::Codegen)?;
 
     let c_path = out_path.with_extension("c");
-    std::fs::write(&c_path, c_src)?;
+    std::fs::write(&c_path, &c_src)?;
 
-    let output = Command::new(c_compiler())
-        .arg("-O2")
-        .arg("-o")
-        .arg(out_path)
-        .arg(&c_path)
-        .output()?;
+    let mut cmd = Command::new(c_compiler());
+    cmd.arg("-O2").arg("-g0");
+    // Strip the absolute build directory from anything the compiler might embed,
+    // so a binary built at `/tmp/a` and one built at `/home/b` are identical.
+    if let Some(dir) = c_path.parent() {
+        if !dir.as_os_str().is_empty() {
+            cmd.arg(format!("-ffile-prefix-map={}=.", dir.display()));
+        }
+    }
+    let output = cmd.arg("-o").arg(out_path).arg(&c_path).output()?;
     if !output.status.success() {
         return Err(BuildError::Compiler(
             String::from_utf8_lossy(&output.stderr).into_owned(),
