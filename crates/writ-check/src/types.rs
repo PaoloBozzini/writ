@@ -532,25 +532,40 @@ impl<'m> Checker<'m> {
         use writ_ast::Pattern;
         match pattern {
             Pattern::Wildcard { .. } => *has_catch_all = true,
-            Pattern::Ident { name, .. } => {
+            Pattern::Ident { name, span } => {
                 // A name that is a known nullary variant covers that variant;
                 // otherwise it is a binding that matches the whole scrutinee.
-                if let Some((variant, _)) = self.ctors.get_key_value(name.as_str()) {
-                    covered.insert(*variant);
+                let looked = self
+                    .ctors
+                    .get_key_value(name.as_str())
+                    .map(|(v, c)| (*v, c.owner.clone()));
+                if let Some((variant, owner)) = looked {
+                    if self.variant_matches_scrutinee(&owner, scrutinee_ty, name, *span) {
+                        covered.insert(variant);
+                    }
                 } else {
                     *has_catch_all = true;
                     self.bind(name.clone(), scrutinee_ty.clone());
                 }
             }
-            Pattern::Variant { name, args, .. } => {
+            Pattern::Variant { name, args, span } => {
                 let looked = self
                     .ctors
                     .get_key_value(name.as_str())
                     .map(|(v, c)| (*v, c.owner.clone(), c.generics.clone(), c.fields));
                 if let Some((variant, owner, generics, fields)) = looked {
-                    covered.insert(variant);
-                    let field_types = instantiate_fields(&owner, &generics, fields, scrutinee_ty);
-                    self.bind_subpatterns(args, &field_types);
+                    if self.variant_matches_scrutinee(&owner, scrutinee_ty, name, *span) {
+                        covered.insert(variant);
+                        let field_types =
+                            instantiate_fields(&owner, &generics, fields, scrutinee_ty);
+                        self.bind_subpatterns(args, &field_types);
+                    } else {
+                        // Alien pattern: bind its variables opaquely so the arm
+                        // body does not cascade into unknown-variable errors.
+                        for sub in args {
+                            self.bind_pattern(sub, &Type::Error);
+                        }
+                    }
                 } else {
                     // Unknown constructor: bind sub-pattern variables opaquely.
                     for sub in args {
@@ -558,6 +573,39 @@ impl<'m> Checker<'m> {
                     }
                 }
             }
+        }
+    }
+
+    /// Whether a variant pattern owned by `owner` may match a scrutinee of type
+    /// `scrutinee_ty`. A pattern from a *different* sum type is a compile error
+    /// (naming both types); it never contributes to coverage and its payload
+    /// bindings are not instantiated from the wrong type. When the scrutinee is
+    /// not a known sum type (already an error, or `Infer`), no second diagnostic
+    /// is raised.
+    fn variant_matches_scrutinee(
+        &mut self,
+        owner: &str,
+        scrutinee_ty: &Type,
+        pattern_name: &str,
+        span: Span,
+    ) -> bool {
+        match scrutinee_ty {
+            Type::Named { name, .. } if self.sum_variants.contains_key(name.as_str()) => {
+                if name == owner {
+                    true
+                } else {
+                    self.error(
+                        "T0012",
+                        span,
+                        format!(
+                            "pattern `{pattern_name}` belongs to type `{owner}`, but the matched value has type `{name}`"
+                        ),
+                    );
+                    false
+                }
+            }
+            // Not a known sum type: don't pile a second error onto the scrutinee.
+            _ => true,
         }
     }
 
