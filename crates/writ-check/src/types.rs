@@ -112,7 +112,38 @@ impl<'m> Checker<'m> {
         for param in &sig.params {
             self.bind(param.name.clone(), Type::resolve(&param.ty));
         }
+        self.check_contracts(sig);
         self.check_block(body);
+    }
+
+    /// Type-check the signature's contract predicates. A `requires` sees the
+    /// parameters; an `ensures` also sees `result` bound to the return type. Each
+    /// predicate must be `Bool`.
+    fn check_contracts(&mut self, sig: &Signature) {
+        for clause in &sig.requires {
+            let ty = self.check_expr(&clause.predicate);
+            self.require_contract(&ty, clause.predicate.span(), "requires");
+        }
+        if !sig.ensures.is_empty() {
+            self.scopes.push(HashMap::new());
+            let ret = self.current_ret.clone();
+            self.bind("result".to_string(), ret);
+            for clause in &sig.ensures {
+                let ty = self.check_expr(&clause.predicate);
+                self.require_contract(&ty, clause.predicate.span(), "ensures");
+            }
+            self.scopes.pop();
+        }
+    }
+
+    fn require_contract(&mut self, ty: &Type, span: Span, clause: &str) {
+        if !ty.compatible(&Type::Bool) {
+            self.error(
+                "T0007",
+                span,
+                format!("`{clause}` predicate must be `Bool`, found `{ty}`"),
+            );
+        }
     }
 
     fn bind(&mut self, name: String, ty: Type) {
