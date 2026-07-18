@@ -5,11 +5,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "writ_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "writ"
 path = "src/main.rs"
 
 [dependencies]
+writ-ast.workspace = true
 writ-parser.workspace = true
 writ-check.workspace = true
 writ-interp.workspace = true
