@@ -39,10 +39,10 @@ fn factorial_runs_end_to_end() {
 }
 
 #[test]
-fn option_example_matches_on_presence() {
+fn rock_paper_scissors_example_decides_the_winner() {
     assert_eq!(
-        run_example("option.writ"),
-        vec!["Some(5)", "None", "5", "0"]
+        run_example("rock_paper_scissors.writ"),
+        vec!["player 1 wins", "player 2 wins", "draw"]
     );
 }
 

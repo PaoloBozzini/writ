@@ -430,7 +430,7 @@ Contract diagnostics also carry a **blame** direction (`caller` /
 
 - **Examples:** the [`examples/`](../examples) directory:
   - `hello.writ`, `factorial.writ` — the basics;
-  - `option.writ`, `shapes.writ` — sum types and `match`;
+  - `rock_paper_scissors.writ`, `shapes.writ` — sum types and `match`;
   - `text.writ` — string processing with the text built-ins;
   - `contract.writ` — contracts that hold (and `reject_wrong_answer.writ`, one
     that fails);

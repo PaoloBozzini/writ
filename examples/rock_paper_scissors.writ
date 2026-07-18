@@ -1,0 +1,34 @@
+// Sum types and `match`: modeling a small domain directly in the types.
+//
+// A `Move` is exactly one of three shapes. `match` splits on which one, and the
+// compiler checks that every case is handled — forget one and it will not
+// compile. (Writ has no built-in enums; you declare the shapes your program
+// needs.)
+
+type Move = Rock | Paper | Scissors
+
+// Does `a` beat `b`? A nested `match` decides each of the nine pairings; the `_`
+// wildcard covers "any other move" in the inner matches.
+fn beats(a: Move, b: Move) -> Bool {
+    return match a {
+        Rock     => match b { Scissors => true, _ => false },
+        Paper    => match b { Rock     => true, _ => false },
+        Scissors => match b { Paper    => true, _ => false },
+    };
+}
+
+fn outcome(a: Move, b: Move) -> Text {
+    if beats(a, b) {
+        return "player 1 wins";
+    }
+    if beats(b, a) {
+        return "player 2 wins";
+    }
+    return "draw";
+}
+
+fn main() {
+    print(outcome(Rock, Scissors));   // player 1 wins
+    print(outcome(Paper, Scissors));  // player 2 wins
+    print(outcome(Rock, Rock));       // draw
+}
