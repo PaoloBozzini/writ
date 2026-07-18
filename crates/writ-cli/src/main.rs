@@ -52,7 +52,8 @@ fn run(path: &std::path::Path) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("runtime error: {e}");
+            // Runtime errors serialize under the same machine-readable schema.
+            println!("{}", diagnostics_to_json(&[e.to_diagnostic()]));
             ExitCode::FAILURE
         }
     }

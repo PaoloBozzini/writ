@@ -29,6 +29,27 @@ impl Severity {
     }
 }
 
+/// Which side a failed contract blames — the load-bearing signal for a
+/// generate-check-repair loop. Present only on contract diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Blame {
+    /// A failed precondition: the caller passed bad input.
+    Caller,
+    /// A failed postcondition: the implementation returned a wrong answer.
+    Implementation,
+}
+
+impl Blame {
+    /// The stable, lowercase wire name used in serialized output.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Blame::Caller => "caller",
+            Blame::Implementation => "implementation",
+        }
+    }
+}
+
 /// A single machine-readable diagnostic.
 ///
 /// The `code` is a stable identifier for the rule that produced the diagnostic
@@ -45,6 +66,8 @@ pub struct Diagnostic {
     pub message: String,
     /// Whether this blocks compilation.
     pub severity: Severity,
+    /// Blame direction, present only for contract diagnostics.
+    pub blame: Option<Blame>,
 }
 
 impl Diagnostic {
@@ -56,6 +79,7 @@ impl Diagnostic {
             span,
             message: message.into(),
             severity: Severity::Error,
+            blame: None,
         }
     }
 
@@ -67,7 +91,15 @@ impl Diagnostic {
             span,
             message: message.into(),
             severity: Severity::Warning,
+            blame: None,
         }
+    }
+
+    /// Attach a blame direction (for contract diagnostics).
+    #[must_use]
+    pub fn with_blame(mut self, blame: Blame) -> Self {
+        self.blame = Some(blame);
+        self
     }
 
     /// Whether this diagnostic blocks compilation.
@@ -86,8 +118,12 @@ impl Diagnostic {
     /// heavy dependencies.
     #[must_use]
     pub fn to_json(&self) -> String {
+        let blame = match self.blame {
+            Some(b) => format!(",\"blame\":\"{}\"", b.as_str()),
+            None => String::new(),
+        };
         format!(
-            "{{\"code\":\"{}\",\"severity\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"message\":\"{}\"}}",
+            "{{\"code\":\"{}\",\"severity\":\"{}\",\"span\":{{\"start\":{},\"end\":{}}},\"message\":\"{}\"{blame}}}",
             escape_json(&self.code),
             self.severity.as_str(),
             self.span.start,
@@ -167,6 +203,19 @@ mod tests {
         assert_eq!(
             d.to_json(),
             r#"{"code":"L0001","severity":"error","span":{"start":0,"end":1},"message":"bad \"quote\"\nand\ttab"}"#
+        );
+    }
+
+    #[test]
+    fn blame_is_emitted_only_when_present() {
+        let plain = Diagnostic::error("E1000", Span::new(0, 1), "boom");
+        assert!(!plain.to_json().contains("blame"));
+
+        let contract = Diagnostic::error("C0002", Span::new(4, 9), "postcondition violated")
+            .with_blame(Blame::Implementation);
+        assert_eq!(
+            contract.to_json(),
+            r#"{"code":"C0002","severity":"error","span":{"start":4,"end":9},"message":"postcondition violated","blame":"implementation"}"#
         );
     }
 
