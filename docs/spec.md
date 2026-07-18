@@ -99,6 +99,22 @@ capability the runtime hands to `main`, and values narrowed from it via `grant`.
 Because the checker also forbids escape, a captured or returned token cannot exist
 at runtime either.
 
+### Sandboxing (the check step and ambient authority)
+
+Writ is **sandboxed by construction**, on two levels:
+
+- **The check step executes nothing.** `writ check` reads the AST and analyzes
+  it — it never runs the program, opens a file, or touches the network. There
+  is no compile-time evaluation, so there is nothing to sandbox and nothing to
+  escape: the strongest sandbox is not running code at all.
+- **The interpreter has no ambient authority.** The only built-in is `print`
+  (to an in-memory buffer). There is no filesystem or network primitive in the
+  language for a program to call, so even `writ run` cannot reach the host. A
+  program that names `read_file` or `http_get` is simply calling an unknown
+  function; it fails closed, having touched nothing. When effectful built-ins
+  are eventually added, they will take a `Cap<T>` and be governed by the
+  capability checker — authority will still never be ambient.
+
 *To be specified:* capability types (`Cap<T>`), the root capability and
 narrowing (`grant`), the authority check at effect sites, and taint tracking.
 
