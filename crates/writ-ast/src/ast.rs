@@ -10,6 +10,7 @@
 //! first-class room for the effect set (`uses {...}`) and the contract clauses
 //! (`requires` / `ensures`) rather than treating them as afterthoughts.
 
+use crate::diagnostic::Blame;
 use crate::span::Span;
 
 /// A literal value written directly in source.
@@ -182,6 +183,18 @@ pub enum Stmt {
         cond: Expr,
         then_block: Block,
         else_block: Option<Block>,
+        span: Span,
+    },
+    /// A runtime-checked assertion carrying **blame**. This node has **no
+    /// surface syntax** — the parser never produces it. It is the single shared
+    /// form that a desugaring pass (`writ-lower`) lowers `requires` / `ensures`
+    /// contracts into, so every back end (interpreter, codegen) implements
+    /// contract-checking semantics in exactly one place. A failed check blames
+    /// [`Blame::Caller`] (a lowered precondition) or [`Blame::Implementation`]
+    /// (a lowered postcondition).
+    Check {
+        predicate: Expr,
+        blame: Blame,
         span: Span,
     },
 }

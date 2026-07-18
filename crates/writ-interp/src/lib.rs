@@ -70,7 +70,10 @@ pub fn eval_block(block: &Block) -> Result<Value, RuntimeError> {
 /// Returns a [`RuntimeError`] if the module has duplicate function names, the
 /// entry function is unknown, or evaluation fails.
 pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    Interpreter::new(module)?.call(entry, args)
+    // Desugar contracts into shared `Check` nodes before executing, so contract
+    // semantics come from the one shared lowering, not a back-end special case.
+    let lowered = writ_lower::lower(module);
+    Interpreter::new(&lowered)?.call(entry, args)
 }
 
 /// Run a module's `main`, handing it the **root capability** for each of its
@@ -80,7 +83,8 @@ pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, Runt
 /// # Errors
 /// Returns a [`RuntimeError`] if there is no `main`, or evaluation fails.
 pub fn run_main(module: &Module) -> Result<Value, RuntimeError> {
-    let interp = Interpreter::new(module)?;
+    let lowered = writ_lower::lower(module);
+    let interp = Interpreter::new(&lowered)?;
     let main = interp
         .funcs
         .get("main")
@@ -249,33 +253,13 @@ impl<'m> Interpreter<'m> {
                 .map_err(|m| RuntimeError::new(param.span, m))?;
         }
 
-        // Preconditions are checked at entry, against the arguments. A failure
-        // is the caller's fault — it passed input the function forbids.
-        for clause in &func.signature.requires {
-            if !self.eval_bool(&clause.predicate, &mut env)? {
-                return Err(RuntimeError::precondition(clause.span));
-            }
-        }
-
-        let result = self.eval_block_in(&func.body, &mut env)?;
-
-        // Postconditions are checked at return, with `result` bound to the
-        // returned value. A failure is the implementation's fault — the body
-        // computed a wrong answer for allowed input.
-        if !func.signature.ensures.is_empty() {
-            env.push_scope();
-            env.define("result", result.clone(), false)
-                .map_err(|m| RuntimeError::new(func.signature.span, m))?;
-            for clause in &func.signature.ensures {
-                if !self.eval_bool(&clause.predicate, &mut env)? {
-                    env.pop_scope();
-                    return Err(RuntimeError::postcondition(clause.span));
-                }
-            }
-            env.pop_scope();
-        }
-
-        Ok(result)
+        // Contracts are **not** special-cased here. The `writ-lower` pass has
+        // already desugared `requires` / `ensures` into `Stmt::Check` nodes in
+        // the body (preconditions first, postconditions on every exit with
+        // `result` bound), so a call just evaluates the body and the shared
+        // `Check` semantics do the rest. This is the single place contract
+        // checking lives, shared with the native back end.
+        self.eval_block_in(&func.body, &mut env)
     }
 
     /// Evaluate a block, opening a nested lexical scope so its bindings do not
@@ -341,6 +325,24 @@ impl<'m> Interpreter<'m> {
                     self.run_block_stmts(else_block, env)
                 } else {
                     Ok(Control::Normal(Value::Unit))
+                }
+            }
+            // A lowered contract check (see `writ-lower`). Evaluating the
+            // predicate to `false` fails the call, blaming the side the lowering
+            // recorded: a lowered precondition blames the caller, a lowered
+            // postcondition blames the implementation.
+            Stmt::Check {
+                predicate,
+                blame,
+                span,
+            } => {
+                if self.eval_bool(predicate, env)? {
+                    Ok(Control::Normal(Value::Unit))
+                } else {
+                    Err(match blame {
+                        Blame::Caller => RuntimeError::precondition(*span),
+                        Blame::Implementation => RuntimeError::postcondition(*span),
+                    })
                 }
             }
         }

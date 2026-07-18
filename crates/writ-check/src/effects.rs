@@ -101,6 +101,7 @@ fn collect_calls_in_stmt<'a>(stmt: &'a Stmt, out: &mut Vec<&'a Expr>) {
         Stmt::Expr(e) => collect_calls_in_expr(e, out),
         Stmt::Return { value: Some(e), .. } => collect_calls_in_expr(e, out),
         Stmt::Return { value: None, .. } => {}
+        Stmt::Check { predicate, .. } => collect_calls_in_expr(predicate, out),
         Stmt::If {
             cond,
             then_block,

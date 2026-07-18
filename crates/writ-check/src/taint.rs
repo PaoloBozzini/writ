@@ -132,6 +132,7 @@ impl TaintChecker<'_> {
             Stmt::Expr(e) => self.check_sinks(e),
             Stmt::Return { value: Some(e), .. } => self.check_sinks(e),
             Stmt::Return { value: None, .. } => {}
+            Stmt::Check { predicate, .. } => self.check_sinks(predicate),
             Stmt::If {
                 cond,
                 then_block,
