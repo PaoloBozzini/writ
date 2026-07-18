@@ -18,6 +18,7 @@ dependencies = [
 name = "writ-cli"
 version = "0.0.0"
 dependencies = [
+ "writ-ast",
  "writ-check",
  "writ-interp",
  "writ-parser",
