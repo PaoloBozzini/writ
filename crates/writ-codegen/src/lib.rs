@@ -16,7 +16,8 @@
 //! operators (with the interpreter's checked overflow and division-by-zero
 //! semantics, and short-circuit `&&` / `||`), `let` / `if` / `return`, function
 //! calls, `print`, the text built-ins (`concat` / `text_len` / `char_at` /
-//! `substring`, char-based via a small UTF-8 decoder), sum-type constructors and
+//! `substring`, char-based via a small UTF-8 decoder), the file-I/O built-ins
+//! (`read_file` / `write_file`), sum-type constructors and
 //! `match` (including nested sub-patterns), capabilities (`Cap<..>` parameters
 //! and `grant<A>(..)` narrowing), and lowered contract checks — the full surface
 //! the interpreter
@@ -166,6 +167,31 @@ static WValue w_substring(WValue s, WValue sv, WValue ev) {
     char *r = malloc(nbytes + 1);
     memcpy(r, ps, nbytes); r[nbytes] = 0;
     return w_text(r);
+}
+
+/* File I/O. The capability argument carries no runtime data (its authority was
+   checked statically); it is accepted and ignored. */
+static WValue w_read_file(WValue cap, WValue path) {
+    (void) cap;
+    FILE *f = fopen(path.s, "rb");
+    if (!f) w_trap("read_file: cannot open file");
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); w_trap("read_file: cannot size file"); }
+    char *buf = malloc((size_t) n + 1);
+    size_t got = fread(buf, 1, (size_t) n, f);
+    fclose(f);
+    buf[got] = 0;
+    return w_text(buf);
+}
+static WValue w_write_file(WValue cap, WValue path, WValue contents) {
+    (void) cap;
+    FILE *f = fopen(path.s, "wb");
+    if (!f) w_trap("write_file: cannot open file");
+    fwrite(contents.s, 1, strlen(contents.s), f);
+    fclose(f);
+    return w_unit();
 }
 "#;
 
@@ -462,12 +488,14 @@ impl Emitter {
                 .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
             return Ok(format!("({arg})"));
         }
-        // Text built-ins map to the UTF-8 runtime helpers.
+        // Text and file-I/O built-ins map to runtime helpers.
         if let Some(helper) = match name.as_str() {
             "concat" => Some(("w_concat", 2)),
             "text_len" => Some(("w_text_len", 1)),
             "char_at" => Some(("w_char_at", 2)),
             "substring" => Some(("w_substring", 3)),
+            "read_file" => Some(("w_read_file", 2)),
+            "write_file" => Some(("w_write_file", 3)),
             _ => None,
         } {
             let (func, arity) = helper;

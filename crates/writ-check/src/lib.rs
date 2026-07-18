@@ -25,6 +25,7 @@
 //! or wrapping the AST, so the AST stays the stable shared contract.
 
 mod authority;
+mod builtins;
 mod capabilities;
 mod effects;
 mod resolve;

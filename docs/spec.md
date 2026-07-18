@@ -122,13 +122,17 @@ Writ is **sandboxed by construction**, on two levels:
   it — it never runs the program, opens a file, or touches the network. There
   is no compile-time evaluation, so there is nothing to sandbox and nothing to
   escape: the strongest sandbox is not running code at all.
-- **The interpreter has no ambient authority.** The only built-in is `print`
-  (to an in-memory buffer). There is no filesystem or network primitive in the
-  language for a program to call, so even `writ run` cannot reach the host. A
-  program that names `read_file` or `http_get` is simply calling an unknown
-  function; it fails closed, having touched nothing. When effectful built-ins
-  are eventually added, they will take a `Cap<T>` and be governed by the
-  capability checker — authority will still never be ambient.
+- **The interpreter has no ambient authority.** Effectful built-ins are
+  **capability-gated**, never ambient. `read_file` / `write_file` (the first real
+  effects) each take a `Cap<Read>` / `Cap<Write>` and declare `uses { Read }` /
+  `uses { Write }`, so the honesty and authority checks apply to them exactly as
+  to any call: a function with no matching capability cannot name the effect
+  (E0301), and a function that reaches one without declaring it is refused
+  (E0101). A sandboxed function — one handed no capability — therefore cannot
+  touch the filesystem, by construction. Pure built-ins (`print` to an in-memory
+  buffer, the text operations) take no capability because they perform no effect.
+  The capability is checked statically; at runtime the token carries no data and
+  the effect is performed only because the caller was proven to hold authority.
 
 *To be specified:* capability types (`Cap<T>`), the root capability and
 narrowing (`grant`), the authority check at effect sites, and taint tracking.
