@@ -31,6 +31,15 @@ const CORPUS: &[&str] = &[
     // A precondition that is satisfied.
     "fn half(n: Int) -> Int requires n > 0 { return n / 2; }\n\
      fn main() { print(half(8)); }",
+    // Sum types, generic constructors, and `match` (payloads, nullary, catch-all).
+    "type Option<T> = Some(T) | None\n\
+     fn unwrap_or(o: Option<Int>, d: Int) -> Int { return match o { Some(x) => x, None => d }; }\n\
+     fn main() { print(unwrap_or(Some(42), 0)); print(unwrap_or(None, 7)); print(Some(5)); print(None); }",
+    // Text: literals (with escapes), printing, and structural equality.
+    "fn main() { print(\"hello\"); print(\"a\\\"b\"); print(\"x\" == \"x\"); print(\"x\" == \"y\"); }",
+    // Structural equality over variants.
+    "type Pair = P(Int, Int)\n\
+     fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
 ];
 
 fn cc() -> String {
