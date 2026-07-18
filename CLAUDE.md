@@ -24,7 +24,7 @@ cargo fmt                       # auto-format
 cargo test -p writ-parser       # test one crate
 cargo run -p writ-cli -- check  path/to/file.writ   # run checkers only
 cargo run -p writ-cli -- run    path/to/file.writ   # interpret
-cargo run -p writ-cli -- build  path/to/file.writ   # compile (once codegen exists)
+cargo run -p writ-cli -- build  path/to/file.writ   # compile to a native binary via the C back end
 ```
 
 If a command doesn't exist yet, the crate that should own it probably isn't built — check the issue tracker before inventing a new home for it.
@@ -33,7 +33,7 @@ If a command doesn't exist yet, the crate that should own it probably isn't buil
 
 ## Architecture
 
-Pipeline: **source → lexer → parser → AST → checkers → interpreter** (native codegen comes later; self-hosting later still).
+Pipeline: **source → lexer → parser → AST → checkers → lower → interpreter / C codegen** (self-hosting later still).
 
 Crates and their **allowed dependency direction** (arrows = "depends on"):
 
@@ -46,9 +46,11 @@ graph TD
   lower[writ-lower] --> ast
   interp[writ-interp] --> ast
   interp --> lower
+  codegen[writ-codegen] --> ast
   cli[writ-cli] --> parser
   cli --> check
   cli --> lower
+  cli --> codegen
   cli --> interp
 ```
 
@@ -58,6 +60,7 @@ graph TD
 - **`writ-check`** — all static analysis: type checker, effect system, capability authority checker, contract checker. Depends on the AST, **never on the interpreter**.
 - **`writ-lower`** — a desugaring pass (AST → AST). Lowers contract clauses (`requires` / `ensures`) into the shared `Stmt::Check` form **once**, so every back end implements contract semantics in exactly one place. Depends on the AST only; runs after checking, before any back end.
 - **`writ-interp`** — a tree-walking evaluator over the AST. A back end, not the source of truth. Consumes the lowered AST.
+- **`writ-codegen`** — the native back end: emits **C** from the checked, lowered AST (`writ build` compiles it with the system C compiler). A back end, not the source of truth; it must agree with the interpreter on the differential corpus. Implements only the shared `Stmt::Check`, never `requires`/`ensures` directly.
 - **`writ-cli`** — a *thin* driver. Wiring only; no language logic lives here.
 
 **Invariants — a change that breaks one of these is wrong, not clever:**

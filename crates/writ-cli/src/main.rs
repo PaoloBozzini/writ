@@ -29,12 +29,7 @@ fn main() -> ExitCode {
     match command.as_str() {
         "check" => check(&path, passes),
         "run" => run(&path),
-        "build" => {
-            // Native code generation is a later milestone (M6); there is no
-            // back end to emit a binary yet.
-            eprintln!("writ build: native code generation is not available yet (M6)");
-            ExitCode::FAILURE
-        }
+        "build" => build(&path),
         other => {
             eprintln!("unknown subcommand `{other}`; expected check | run | build");
             ExitCode::from(2)
@@ -67,6 +62,28 @@ fn run(path: &std::path::Path) -> ExitCode {
         Err(e) => {
             // Runtime errors serialize under the same machine-readable schema.
             println!("{}", diagnostics_to_json(&[e.to_diagnostic()]));
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Check, then (if clean) compile `main` to a native binary beside the source.
+fn build(path: &std::path::Path) -> ExitCode {
+    let (program, mut diagnostics) = writ_cli::load_program(path);
+    diagnostics.extend(writ_cli::check(&program));
+    if diagnostics.iter().any(writ_ast::Diagnostic::is_error) {
+        return report(&diagnostics);
+    }
+    // The binary is the source path with its extension dropped (`foo.writ` →
+    // `foo`); the emitted C sits beside it as `foo.c`.
+    let out_path = path.with_extension("");
+    match writ_cli::build(&program, &out_path) {
+        Ok(_) => {
+            eprintln!("writ build: wrote {}", out_path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("writ build: {e}");
             ExitCode::FAILURE
         }
     }

@@ -1,22 +1,15 @@
 [package]
-name = "writ-cli"
+name = "writ-codegen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-name = "writ_cli"
-path = "src/lib.rs"
-
-[[bin]]
-name = "writ"
-path = "src/main.rs"
-
 [dependencies]
 writ-ast.workspace = true
+
+[dev-dependencies]
+# Test-only: parse + lower real source so codegen tests operate on the exact
+# tree a back end receives. Keeps the crate graph acyclic.
 writ-parser.workspace = true
-writ-check.workspace = true
 writ-lower.workspace = true
-writ-codegen.workspace = true
-writ-interp.workspace = true
