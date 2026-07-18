@@ -352,3 +352,26 @@ fn diagnostics_are_deterministic() {
     let src = "fn f() { let x: Int = true; if 1 { return; } }";
     assert_eq!(codes(src), codes(src));
 }
+
+// --- Duplicate top-level names (#101) -------------------------------------
+
+#[test]
+fn duplicate_function_names_are_a_static_error() {
+    let cs = codes(
+        "fn f() -> Int { return 1; }\nfn f() -> Int { return 2; }\nfn main() { print(f()); }",
+    );
+    assert_eq!(cs, vec!["T0010"], "second `f` is refused");
+}
+
+#[test]
+fn duplicate_variant_names_are_a_static_error() {
+    // Same variant name in two type declarations.
+    let cs = codes("type A = Dup | X\ntype B = Dup | Y\nfn main() {}");
+    assert_eq!(cs, vec!["T0011"], "second `Dup` is refused");
+}
+
+#[test]
+fn duplicate_variant_within_one_type_is_a_static_error() {
+    let cs = codes("type A = Dup | Dup\nfn main() {}");
+    assert_eq!(cs, vec!["T0011"]);
+}
