@@ -19,8 +19,9 @@
 //! `substring`, char-based via a small UTF-8 decoder), the file-I/O built-ins
 //! (`read_file` / `write_file`), sum-type constructors and
 //! `match` (including nested sub-patterns), capabilities (`Cap<..>` parameters
-//! and `grant<A>(..)` narrowing), and lowered contract checks — the full surface
-//! the interpreter
+//! and `grant<A>(..)` narrowing), higher-order functions (pure function values,
+//! emitted as C function pointers), and lowered contract checks — the full
+//! surface the interpreter
 //! runs. Any construct the front end could add later that codegen does not yet
 //! handle is reported as a [`CodegenError`] rather than mis-compiled.
 
@@ -56,17 +57,21 @@ const PRELUDE: &str = r#"#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { W_INT, W_BOOL, W_UNIT, W_TEXT, W_VARIANT, W_CAP } WTag;
+typedef enum { W_INT, W_BOOL, W_UNIT, W_TEXT, W_VARIANT, W_CAP, W_FN } WTag;
 typedef struct WValue WValue;
-struct WValue { WTag tag; int64_t i; const char *s; WValue *fields; int64_t nfields; };
+/* A generic function pointer; a concrete `WValue(*)(WValue, ...)` is cast to and
+   from this at each call site, where the arity is known. */
+typedef WValue (*WFn)(void);
+struct WValue { WTag tag; int64_t i; const char *s; WValue *fields; int64_t nfields; WFn fn; };
 
-static WValue w_int(int64_t x) { WValue v; v.tag = W_INT; v.i = x; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
-static WValue w_bool(int b) { WValue v; v.tag = W_BOOL; v.i = b ? 1 : 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
-static WValue w_unit(void) { WValue v; v.tag = W_UNIT; v.i = 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
-static WValue w_text(const char *s) { WValue v; v.tag = W_TEXT; v.i = 0; v.s = s; v.fields = 0; v.nfields = 0; return v; }
-static WValue w_cap(const char *authority) { WValue v; v.tag = W_CAP; v.i = 0; v.s = authority; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_int(int64_t x) { WValue v; v.tag = W_INT; v.i = x; v.s = 0; v.fields = 0; v.nfields = 0; v.fn = 0; return v; }
+static WValue w_bool(int b) { WValue v; v.tag = W_BOOL; v.i = b ? 1 : 0; v.s = 0; v.fields = 0; v.nfields = 0; v.fn = 0; return v; }
+static WValue w_unit(void) { WValue v; v.tag = W_UNIT; v.i = 0; v.s = 0; v.fields = 0; v.nfields = 0; v.fn = 0; return v; }
+static WValue w_text(const char *s) { WValue v; v.tag = W_TEXT; v.i = 0; v.s = s; v.fields = 0; v.nfields = 0; v.fn = 0; return v; }
+static WValue w_cap(const char *authority) { WValue v; v.tag = W_CAP; v.i = 0; v.s = authority; v.fields = 0; v.nfields = 0; v.fn = 0; return v; }
+static WValue w_fn(WFn p, const char *name) { WValue v; v.tag = W_FN; v.i = 0; v.s = name; v.fields = 0; v.nfields = 0; v.fn = p; return v; }
 static WValue w_variant(const char *name, WValue *fields, int64_t n) {
-    WValue v; v.tag = W_VARIANT; v.i = 0; v.s = name; v.nfields = n;
+    WValue v; v.tag = W_VARIANT; v.i = 0; v.s = name; v.nfields = n; v.fn = 0;
     if (n > 0) { v.fields = malloc(sizeof(WValue) * (size_t) n); for (int64_t k = 0; k < n; k++) v.fields[k] = fields[k]; }
     else v.fields = 0;
     return v;
@@ -91,6 +96,7 @@ static int w_equal(WValue a, WValue b) {
     switch (a.tag) {
         case W_INT: case W_BOOL: case W_UNIT: return a.i == b.i;
         case W_TEXT: case W_CAP: return strcmp(a.s, b.s) == 0;
+        case W_FN: return a.fn == b.fn;
         case W_VARIANT:
             if (strcmp(a.s, b.s) != 0 || a.nfields != b.nfields) return 0;
             for (int64_t k = 0; k < a.nfields; k++) if (!w_equal(a.fields[k], b.fields[k])) return 0;
@@ -108,6 +114,7 @@ static void w_fprint(FILE *f, WValue v) {
         case W_UNIT: fprintf(f, "()"); break;
         case W_TEXT: fprintf(f, "%s", v.s); break;
         case W_CAP: fprintf(f, "<capability %s>", v.s); break;
+        case W_FN: fprintf(f, "<function %s>", v.s); break;
         case W_VARIANT:
             fprintf(f, "%s", v.s);
             if (v.nfields > 0) {
@@ -244,28 +251,17 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         })
         .collect();
 
-    // Higher-order functions (function-typed parameters / returns) are not yet
-    // supported by the C back end — refuse rather than mis-compile a function
-    // value into a missing symbol.
-    for f in &funcs {
-        let fn_typed = |t: &writ_ast::TypeExpr| t.name == "fn";
-        if f.signature.params.iter().any(|p| fn_typed(&p.ty))
-            || f.signature.return_type.as_ref().is_some_and(fn_typed)
-        {
-            return Err(CodegenError::new(
-                f.signature.span,
-                "higher-order functions (function values) are not supported by the C back end yet",
-            ));
-        }
-    }
-
     let main = funcs
         .iter()
         .find(|f| f.signature.name == "main")
         .ok_or_else(|| CodegenError::new(Span::new(0, 0), "no `main` function to build"))?;
 
+    let fn_names: std::collections::HashSet<String> =
+        funcs.iter().map(|f| f.signature.name.clone()).collect();
+
     let mut e = Emitter {
         ctors,
+        fn_names,
         out: String::new(),
         counter: 0,
     };
@@ -331,6 +327,9 @@ struct Emitter {
     /// Sum-type constructor name → arity, so a name can be classified as a
     /// constructor (vs a function or a variable).
     ctors: HashMap<String, usize>,
+    /// Top-level function names, so an identifier can be classified as a function
+    /// (a direct call, or a function *value*) rather than a local.
+    fn_names: std::collections::HashSet<String>,
     out: String,
     /// A monotonic counter for unique temporary names (e.g. per `match`).
     counter: usize,
@@ -426,6 +425,11 @@ impl Emitter {
                         ));
                     }
                     return Ok(format!("w_variant(\"{name}\", 0, 0)"));
+                }
+                // A bare name that is a top-level function is a function *value*:
+                // a pointer to `wf_<name>`, tagged with the name for printing.
+                if self.fn_names.contains(name) {
+                    return Ok(format!("w_fn((WFn){}, \"{name}\")", cname(name)));
                 }
                 Ok(local(name))
             }
@@ -558,7 +562,24 @@ impl Emitter {
                 .ok_or_else(|| CodegenError::new(span, "`grant` needs one type argument"))?;
             return Ok(format!("w_cap(\"{authority}\")"));
         }
-        Ok(format!("{}({})", cname(name), emitted.join(", ")))
+        // A direct call to a known top-level function.
+        if self.fn_names.contains(name) {
+            return Ok(format!("{}({})", cname(name), emitted.join(", ")));
+        }
+        // Otherwise the callee is a **function value** held in a local: cast its
+        // pointer to a function of the right arity (all Writ functions take and
+        // return `WValue`) and call through it.
+        let cast_params = if emitted.is_empty() {
+            "void".to_string()
+        } else {
+            vec!["WValue"; emitted.len()].join(", ")
+        };
+        Ok(format!(
+            "((WValue(*)({})){}.fn)({})",
+            cast_params,
+            local(name),
+            emitted.join(", ")
+        ))
     }
 
     /// Emit a `match` as a GNU statement-expression: bind the scrutinee once,

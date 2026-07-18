@@ -134,8 +134,15 @@ fn a_lowered_contract_emits_a_trap() {
 }
 
 #[test]
-fn higher_order_functions_are_refused_for_now() {
-    let m = lower_src("fn apply(g: fn(Int) -> Int, x: Int) -> Int { return g(x); }\nfn main() {}");
-    let err = emit_c(&m).expect_err("HOF not supported by the C back end yet");
-    assert!(err.message.contains("higher-order"), "{}", err.message);
+fn higher_order_functions_emit_function_pointers() {
+    let m = lower_src(
+        "fn apply(g: fn(Int) -> Int, x: Int) -> Int { return g(x); }\n\
+         fn inc(n: Int) -> Int { return n + 1; }\n\
+         fn main() { print(apply(inc, 5)); }",
+    );
+    let c = emit_c(&m).expect("HOF emits");
+    // `inc` passed as a value becomes a tagged function pointer...
+    assert!(c.contains("w_fn((WFn)wf_inc"), "function value: {c}");
+    // ...and `g(x)` inside `apply` calls through the pointer with an arity cast.
+    assert!(c.contains("(WValue(*)(WValue))"), "indirect call: {c}");
 }
