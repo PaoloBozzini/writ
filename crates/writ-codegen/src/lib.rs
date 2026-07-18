@@ -244,6 +244,21 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         })
         .collect();
 
+    // Higher-order functions (function-typed parameters / returns) are not yet
+    // supported by the C back end — refuse rather than mis-compile a function
+    // value into a missing symbol.
+    for f in &funcs {
+        let fn_typed = |t: &writ_ast::TypeExpr| t.name == "fn";
+        if f.signature.params.iter().any(|p| fn_typed(&p.ty))
+            || f.signature.return_type.as_ref().is_some_and(fn_typed)
+        {
+            return Err(CodegenError::new(
+                f.signature.span,
+                "higher-order functions (function values) are not supported by the C back end yet",
+            ));
+        }
+    }
+
     let main = funcs
         .iter()
         .find(|f| f.signature.name == "main")

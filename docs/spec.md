@@ -134,10 +134,11 @@ The **ground types** are:
   a single value.
 
 A **type expression** is a name with optional type arguments — `Int`,
-`Option<Int>`, `Cap<Write>`, `Tainted<Text>`. The head names a ground type, a
-declared sum type, or a built-in constructor: `Cap<E>` (a capability for authority
-`E`, §3) or `Tainted<T>` (untrusted data, §3). A name with no built-in rule is
-kept opaque so a later pass can give it meaning.
+`Option<Int>`, `Cap<Write>`, `Tainted<Text>` — or a **function type**
+`fn(P, ...) -> R`. The head of a named type is a ground type, a declared sum type,
+or a built-in constructor: `Cap<E>` (a capability for authority `E`, §3) or
+`Tainted<T>` (untrusted data, §3). A name with no built-in rule is kept opaque so
+a later pass can give it meaning.
 
 There are **no implicit conversions**: `Int` and `Bool` never interconvert, and
 combining or comparing mismatched types is a compile error, not a coercion.
@@ -196,6 +197,12 @@ result takes the return type. `main` may take only capability parameters — it 
 where authority enters a program (§3). A signature also carries the **effect** and
 **contract** clauses the two pillars act on: effects live in the type system, so a
 signature tells you what a function may *do*, not just what it computes.
+
+A top-level function can be passed as a **value** — a *higher-order* function
+takes a parameter of function type `fn(P, ...) -> R` and calls it. Only **pure**
+functions (those with an empty `uses {...}`) may be used as values: an effectful
+function passed as a value would let its effects be performed at a call site the
+honesty and authority passes cannot see, so it is refused.
 
 ### Built-in functions
 

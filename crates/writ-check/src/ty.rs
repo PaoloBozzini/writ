@@ -31,6 +31,12 @@ pub enum Type {
     /// `Option<T>`, which no field fixes. It unifies with any type, so a
     /// nullary constructor stays polymorphic without a full inference engine.
     Infer,
+    /// A function value's type, `fn(P, ...) -> R` — the type of a (pure)
+    /// top-level function passed as a value.
+    Fn {
+        params: Vec<Type>,
+        ret: Box<Type>,
+    },
 }
 
 impl Type {
@@ -42,6 +48,15 @@ impl Type {
             "Bool" => Type::Bool,
             "Text" => Type::Text,
             "Unit" => Type::Unit,
+            // A function type: args are the parameter types followed by the
+            // return type (always present as the last arg).
+            "fn" => match t.args.split_last() {
+                Some((ret, params)) => Type::Fn {
+                    params: params.iter().map(Type::resolve).collect(),
+                    ret: Box::new(Type::resolve(ret)),
+                },
+                None => Type::Error,
+            },
             _ => Type::Named {
                 name: t.name.clone(),
                 args: t.args.iter().map(Type::resolve).collect(),
@@ -61,6 +76,20 @@ impl Type {
             (Type::Error | Type::Infer, _) | (_, Type::Error | Type::Infer) => true,
             (Type::Named { name: n1, args: a1 }, Type::Named { name: n2, args: a2 }) => {
                 n1 == n2 && a1.len() == a2.len() && a1.iter().zip(a2).all(|(x, y)| x.compatible(y))
+            }
+            (
+                Type::Fn {
+                    params: p1,
+                    ret: r1,
+                },
+                Type::Fn {
+                    params: p2,
+                    ret: r2,
+                },
+            ) => {
+                p1.len() == p2.len()
+                    && p1.iter().zip(p2).all(|(x, y)| x.compatible(y))
+                    && r1.compatible(r2)
             }
             _ => self == other,
         }
@@ -86,6 +115,16 @@ impl fmt::Display for Type {
                     write!(f, ">")?;
                 }
                 Ok(())
+            }
+            Type::Fn { params, ret } => {
+                write!(f, "fn(")?;
+                if let Some((first, rest)) = params.split_first() {
+                    write!(f, "{first}")?;
+                    for p in rest {
+                        write!(f, ", {p}")?;
+                    }
+                }
+                write!(f, ") -> {ret}")
             }
         }
     }

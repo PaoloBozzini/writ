@@ -491,3 +491,43 @@ fn char_at_needs_an_int_index() {
 fn char_code_and_code_char_type_check() {
     assert_ok("fn f() -> Text { return code_char(char_code(char_at(\"ab\", 0))); }");
 }
+
+// --- Higher-order functions (#124) ----------------------------------------
+
+#[test]
+fn a_pure_function_can_be_passed_and_called() {
+    assert_ok(
+        "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
+         fn inc(n: Int) -> Int { return n + 1; }\n\
+         fn main() { print(apply(inc, 5)); }",
+    );
+}
+
+#[test]
+fn an_effectful_function_cannot_be_used_as_a_value() {
+    let cs = codes(
+        "fn logit(out: Cap<Write>, n: Int) -> Int uses { Write } { return n; }\n\
+         fn apply(f: fn(Cap<Write>, Int) -> Int, out: Cap<Write>, x: Int) -> Int { return f(out, x); }\n\
+         fn main(root: Cap<Root>) uses { Write } { print(apply(logit, grant<Write>(root), 5)); }",
+    );
+    assert!(
+        cs.contains(&"T0015".to_string()),
+        "effectful fn as value: {cs:?}"
+    );
+}
+
+#[test]
+fn passing_a_wrongly_typed_function_is_rejected() {
+    let cs = codes(
+        "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
+         fn to_len(s: Text) -> Int { return 0; }\n\
+         fn main() { print(apply(to_len, 5)); }",
+    );
+    assert_eq!(cs, vec!["T0001"]);
+}
+
+#[test]
+fn calling_a_function_value_checks_its_arguments() {
+    let cs = codes("fn apply(f: fn(Int) -> Int) -> Int { return f(true); }\nfn main() {}");
+    assert_eq!(cs, vec!["T0001"]);
+}

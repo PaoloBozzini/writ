@@ -536,6 +536,10 @@ impl<'m> Interpreter<'m> {
                         fields: Vec::new(),
                     });
                 }
+                // A bare name that is a top-level function is a function value.
+                if self.funcs.contains_key(name.as_str()) {
+                    return Ok(Value::Function { name: name.clone() });
+                }
                 Err(RuntimeError::new(
                     *span,
                     format!("unbound variable `{name}`"),
@@ -556,6 +560,17 @@ impl<'m> Interpreter<'m> {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.eval_expr_in(arg, env)?);
+                }
+                // A **higher-order call**: the callee names a local holding a
+                // function value (a global function is not in scope as a local).
+                if let Some(v) = env.lookup(name) {
+                    return match v {
+                        Value::Function { name: fname } => self.call_by_name(&fname, values, *span),
+                        other => Err(RuntimeError::new(
+                            *span,
+                            format!("`{name}` is not a function (it is {})", other.type_name()),
+                        )),
+                    };
                 }
                 // `grant<A>(cap)` narrows to a capability tagged with authority A.
                 // Narrowing validity is checked statically; at runtime it just
