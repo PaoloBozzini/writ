@@ -37,6 +37,7 @@ const TAINTED: &str = "Tainted";
 /// result means the module is well-typed.
 #[must_use]
 pub fn check_types(module: &Module) -> Vec<Diagnostic> {
+    let mut diagnostics = check_duplicate_names(module);
     let mut checker = Checker::new(module);
     for item in &module.items {
         let Item::Function(f) = item else {
@@ -44,7 +45,44 @@ pub fn check_types(module: &Module) -> Vec<Diagnostic> {
         };
         checker.check_function(&f.signature, &f.body);
     }
-    checker.diagnostics
+    diagnostics.append(&mut checker.diagnostics);
+    diagnostics
+}
+
+/// Report duplicate top-level names statically: two functions with the same
+/// name, or two sum-type variants with the same name (within or across type
+/// declarations). A duplicated name is a classic generation slip; the prime
+/// directive says it should be a compile error, not a runtime refusal. The
+/// diagnostic points at the **second** definition.
+fn check_duplicate_names(module: &Module) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut seen_fns: HashSet<&str> = HashSet::new();
+    let mut seen_variants: HashSet<&str> = HashSet::new();
+    for item in &module.items {
+        match item {
+            Item::Function(f) => {
+                if !seen_fns.insert(f.signature.name.as_str()) {
+                    diagnostics.push(Diagnostic::error(
+                        "T0010",
+                        f.signature.span,
+                        format!("function `{}` is defined more than once", f.signature.name),
+                    ));
+                }
+            }
+            Item::Type(decl) => {
+                for variant in &decl.variants {
+                    if !seen_variants.insert(variant.name.as_str()) {
+                        diagnostics.push(Diagnostic::error(
+                            "T0011",
+                            variant.span,
+                            format!("variant `{}` is defined more than once", variant.name),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    diagnostics
 }
 
 /// A function's resolved parameter and return types.
