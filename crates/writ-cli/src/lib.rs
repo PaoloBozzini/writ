@@ -5,7 +5,8 @@
 //! pipeline crates.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use writ_ast::{Block, Diagnostic, Expr, Function, Item, Module, Span, Stmt};
 use writ_interp::{Interpreter, RuntimeError, Value};
@@ -152,6 +153,77 @@ pub fn run(program: &Program) -> Result<Vec<String>, RuntimeError> {
         .collect();
     interp.call("main", args)?;
     Ok(interp.output())
+}
+
+/// Why a native build failed: a construct the back end cannot emit, an I/O
+/// problem, or the system C compiler rejecting the generated source.
+#[derive(Debug)]
+pub enum BuildError {
+    /// The program uses a construct the C back end does not support yet.
+    Codegen(writ_codegen::CodegenError),
+    /// Reading, writing, or spawning failed.
+    Io(std::io::Error),
+    /// The C compiler exited non-zero (its stderr is included).
+    Compiler(String),
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildError::Codegen(e) => {
+                write!(
+                    f,
+                    "codegen: {} (at {}..{})",
+                    e.message, e.span.start, e.span.end
+                )
+            }
+            BuildError::Io(e) => write!(f, "io: {e}"),
+            BuildError::Compiler(msg) => write!(f, "C compiler failed: {msg}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for BuildError {
+    fn from(e: std::io::Error) -> Self {
+        BuildError::Io(e)
+    }
+}
+
+/// The C compiler to invoke: `$CC` if set, otherwise `cc`.
+fn c_compiler() -> String {
+    std::env::var("CC").unwrap_or_else(|_| "cc".to_string())
+}
+
+/// Compile a checked program to a standalone native binary at `out_path`.
+///
+/// The pipeline is: link the modules, lower contracts into shared `Check`
+/// nodes, emit C, then hand the C to the system compiler. The generated C is
+/// written beside the binary (`out_path` with a `.c` extension) so it can be
+/// inspected. Returns the path to the emitted C source.
+///
+/// # Errors
+/// Returns a [`BuildError`] if codegen rejects a construct, file I/O fails, or
+/// the C compiler exits non-zero.
+pub fn build(program: &Program, out_path: &Path) -> Result<PathBuf, BuildError> {
+    let linked = link(program);
+    let lowered = writ_lower::lower(&linked);
+    let c_src = writ_codegen::emit_c(&lowered).map_err(BuildError::Codegen)?;
+
+    let c_path = out_path.with_extension("c");
+    std::fs::write(&c_path, c_src)?;
+
+    let output = Command::new(c_compiler())
+        .arg("-O2")
+        .arg("-o")
+        .arg(out_path)
+        .arg(&c_path)
+        .output()?;
+    if !output.status.success() {
+        return Err(BuildError::Compiler(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    Ok(c_path)
 }
 
 /// Flatten a program into a single module: each imported module's functions are

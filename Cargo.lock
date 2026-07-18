@@ -20,7 +20,17 @@ version = "0.0.0"
 dependencies = [
  "writ-ast",
  "writ-check",
+ "writ-codegen",
  "writ-interp",
+ "writ-lower",
+ "writ-parser",
+]
+
+[[package]]
+name = "writ-codegen"
+version = "0.0.0"
+dependencies = [
+ "writ-ast",
  "writ-lower",
  "writ-parser",
 ]
