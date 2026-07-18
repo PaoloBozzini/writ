@@ -491,3 +491,41 @@ fn char_at_needs_an_int_index() {
 fn char_code_and_code_char_type_check() {
     assert_ok("fn f() -> Text { return code_char(char_code(char_at(\"ab\", 0))); }");
 }
+
+// --- Inspectable tainted text (#135) --------------------------------------
+
+#[test]
+fn tainted_text_can_be_inspected() {
+    // Reading a tainted value's length / characters / codes is allowed, so you
+    // can validate untrusted data before sanitizing it.
+    assert_ok(
+        "fn validate(t: Tainted<Text>) -> Bool {\n\
+            return (text_len(t) < 100) && (char_code(char_at(t, 0)) >= 65);\n\
+         }",
+    );
+}
+
+#[test]
+fn slicing_tainted_text_stays_tainted() {
+    // `char_at` on a tainted value is `Tainted<Text>`, not `Text`, so it cannot
+    // be laundered into a trusted position.
+    let cs = codes("fn f(t: Tainted<Text>) { let x: Text = char_at(t, 0); }");
+    assert_eq!(cs, vec!["T0001"]);
+}
+
+#[test]
+fn slicing_tainted_text_typed_as_tainted_is_fine() {
+    assert_ok("fn f(t: Tainted<Text>) { let x: Tainted<Text> = substring(t, 0, 1); }");
+}
+
+#[test]
+fn concat_propagates_taint() {
+    // Joining tainted data with clean data yields a tainted result.
+    let cs = codes("fn f(t: Tainted<Text>) { let x: Text = concat(t, \"safe\"); }");
+    assert_eq!(cs, vec!["T0001"]);
+}
+
+#[test]
+fn concat_of_clean_text_stays_clean() {
+    assert_ok("fn f() { let x: Text = concat(\"a\", \"b\"); }");
+}

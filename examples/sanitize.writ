@@ -18,6 +18,19 @@ fn handle(db: Cap<Query>, input: Tainted<Text>) uses { Query } {
     run_query(db, sanitize(input));
 }
 
+// You can also *inspect* tainted data before certifying it: the read-only text
+// built-ins accept `Tainted<Text>`, so `looks_short` can validate the input's
+// length without laundering it. `char_at`/`substring`/`concat` stay tainted, so
+// inspection can never quietly produce trusted text — only `sanitize` does.
+fn looks_short(input: Tainted<Text>) -> Bool {
+    return text_len(input) < 100;
+}
+fn handle_checked(db: Cap<Query>, input: Tainted<Text>) uses { Query } {
+    if looks_short(input) {
+        run_query(db, sanitize(input));
+    }
+}
+
 // The rejection this buys you. `unsafe_handle` passes untrusted `input` straight
 // to the sink — refused with E0401 before it can run:
 //

@@ -240,6 +240,28 @@ the same order.
 - Untrusted data is `Tainted<T>` and cannot reach a **sink** (shell, query)
   without passing a `sanitize` boundary.
 
+### Taint: inspecting untrusted data
+
+Untrusted input has type `Tainted<T>`. A **sink** is a function declaring a
+dangerous effect (`uses { Query }` or `uses { Shell }`), and `sanitize` is the
+sole boundary that turns `Tainted<T>` into a trusted `T` — taint tracking is
+structural, so wrapping a tainted value in a `match` or an operator does not
+launder it around that boundary.
+
+`sanitize` changes only the *type*, not the value: at runtime it is the identity
+function (taint is a compile-time property with no runtime representation). It
+does not itself validate or escape — it is the point at which *you* certify a
+value as trusted.
+
+So that certification can be *informed*, the read-only text built-ins accept
+`Tainted<Text>` and **propagate** taint: `text_len` and `char_code` return an
+(untracked) `Int`, while `char_at`, `substring`, and `concat` return
+`Tainted<Text>` whenever a textual argument was tainted. This lets a program
+inspect untrusted data — check its length, its characters — and only then
+`sanitize` it, while slicing or joining can never quietly produce trusted text.
+*(Richer boundaries — escaping built-ins, or a validator-driven `sanitize` — are
+future work.)*
+
 ### Escape semantics (ARCH-02): capabilities are second-class
 
 Making `Cap<T>` un-constructible and parameter-only controls how authority is
