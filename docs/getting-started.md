@@ -429,8 +429,10 @@ Contract diagnostics also carry a **blame** direction (`caller` /
 ## Where to go next
 
 - **Examples:** the [`examples/`](../examples) directory — `hello.writ`,
-  `factorial.writ`, the capability demo `reject_fs_write.writ`, the contract demo
-  `reject_wrong_answer.writ`, and a multi-file program under `modules/`.
+  `factorial.writ`, the capability demo `reject_fs_write.writ`, a **custom
+  authority** demo `custom_capability.writ` (defining your own `Cap<Audit>`), the
+  contract demo `reject_wrong_answer.writ`, and a multi-file program under
+  `modules/`.
 - **The standard library:** [`std/list.writ`](../std/list.writ), a generic list
   written in Writ.
 - **Self-hosting:** [`bootstrap/lexer.writ`](../bootstrap/lexer.writ) — a lexer

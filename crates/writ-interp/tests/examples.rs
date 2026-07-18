@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use writ_interp::Interpreter;
+use writ_interp::{Interpreter, Value};
 
 fn examples_dir() -> PathBuf {
     // CARGO_MANIFEST_DIR is crates/writ-interp; the examples live at the root.
@@ -36,4 +36,61 @@ fn hello_prints_a_greeting() {
 #[test]
 fn factorial_runs_end_to_end() {
     assert_eq!(run_example("factorial.writ"), vec!["120".to_string()]);
+}
+
+/// Parse the example at `name`, run `main` — handing it a root capability for
+/// each of its capability parameters, as the runtime does — and return the
+/// printed lines.
+fn run_example_with_root(name: &str) -> Vec<String> {
+    let path = examples_dir().join(name);
+    let src = fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()));
+    let parsed = writ_parser::parse(&src);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{name} should parse: {:?}",
+        parsed.diagnostics
+    );
+    let interp = Interpreter::new(&parsed.module).expect("build interpreter");
+    let main = parsed
+        .module
+        .items
+        .iter()
+        .find_map(|it| match it {
+            writ_ast::Item::Function(f) if f.signature.name == "main" => Some(f),
+            _ => None,
+        })
+        .expect("a `main` function");
+    let args = main
+        .signature
+        .params
+        .iter()
+        .map(|p| {
+            if p.ty.name == "Cap" {
+                let authority =
+                    p.ty.args
+                        .first()
+                        .map_or_else(|| "Root".to_string(), |a| a.name.clone());
+                Value::Capability { authority }
+            } else {
+                Value::Unit
+            }
+        })
+        .collect();
+    interp
+        .call("main", args)
+        .unwrap_or_else(|e| panic!("{name} should run: {e}"));
+    interp.output()
+}
+
+#[test]
+fn custom_capability_example_audits_with_a_granted_token() {
+    // A user-defined `Audit` authority, granted from the root capability and
+    // forwarded through the call chain.
+    assert_eq!(
+        run_example_with_root("custom_capability.writ"),
+        vec![
+            "[audit] login: alice".to_string(),
+            "[audit] system started".to_string(),
+        ]
+    );
 }
