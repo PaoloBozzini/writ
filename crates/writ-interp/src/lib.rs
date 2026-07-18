@@ -26,6 +26,12 @@ use writ_ast::{
 /// (which threads capabilities through effectful built-ins) comes later.
 const PRINT: &str = "print";
 
+/// The capability-narrowing built-in: `grant<A>(cap)`.
+const GRANT: &str = "grant";
+
+/// The type-head marking a capability parameter.
+const CAP: &str = "Cap";
+
 pub use env::Env;
 pub use value::{Blame, RuntimeError, Value};
 
@@ -62,6 +68,38 @@ pub fn eval_block(block: &Block) -> Result<Value, RuntimeError> {
 /// entry function is unknown, or evaluation fails.
 pub fn run(module: &Module, entry: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
     Interpreter::new(module)?.call(entry, args)
+}
+
+/// Run a module's `main`, handing it the **root capability** for each of its
+/// capability parameters — the sole source of authority, provided by the
+/// runtime. Non-capability parameters (if any) receive `Unit`.
+///
+/// # Errors
+/// Returns a [`RuntimeError`] if there is no `main`, or evaluation fails.
+pub fn run_main(module: &Module) -> Result<Value, RuntimeError> {
+    let interp = Interpreter::new(module)?;
+    let main = interp
+        .funcs
+        .get("main")
+        .copied()
+        .ok_or_else(|| RuntimeError::new(Span::new(0, 0), "no `main` function"))?;
+    let args = main
+        .signature
+        .params
+        .iter()
+        .map(|p| {
+            if p.ty.name == CAP {
+                let authority =
+                    p.ty.args
+                        .first()
+                        .map_or_else(|| "Root".to_string(), |a| a.name.clone());
+                Value::Capability { authority }
+            } else {
+                Value::Unit
+            }
+        })
+        .collect();
+    interp.call("main", args)
 }
 
 /// A tree-walking interpreter over a module's functions.
@@ -325,7 +363,12 @@ impl<'m> Interpreter<'m> {
                     format!("unbound variable `{name}`"),
                 ))
             }
-            Expr::Call { callee, args, span } => {
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+                span,
+            } => {
                 let Expr::Identifier { name, .. } = callee.as_ref() else {
                     return Err(RuntimeError::new(
                         *span,
@@ -335,6 +378,16 @@ impl<'m> Interpreter<'m> {
                 let mut values = Vec::with_capacity(args.len());
                 for arg in args {
                     values.push(self.eval_expr_in(arg, env)?);
+                }
+                // `grant<A>(cap)` narrows to a capability tagged with authority A.
+                // Narrowing validity is checked statically; at runtime it just
+                // mints the narrowed token. The source is evaluated (above) so a
+                // bad source still errors, but is otherwise opaque here.
+                if name == GRANT {
+                    let authority = type_args
+                        .first()
+                        .map_or_else(|| "Root".to_string(), |t| t.name.clone());
+                    return Ok(Value::Capability { authority });
                 }
                 // A call to a constructor builds a variant value; otherwise it is
                 // an ordinary function or built-in call.
@@ -874,6 +927,42 @@ fn f() -> Int { return code(Blue); }
 ";
         let e = run_program(src, "f", vec![]).unwrap_err();
         assert!(e.message.contains("no match arm"), "{}", e.message);
+    }
+
+    // --- capabilities: root + grant at runtime (#22) -----------------------
+
+    #[test]
+    fn run_main_hands_main_a_root_capability_that_grant_narrows() {
+        let src = "\
+fn write_line(out: Cap<Write>, msg: Text) uses { Write } { return; }
+fn main(root: Cap<Root>) uses { Write } {
+    write_line(grant<Write>(root), \"ok\");
+}
+";
+        let result = writ_parser::parse(src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        // The runtime supplies the root capability; narrowing and the effectful
+        // call run without error.
+        assert_eq!(run_main(&result.module).unwrap(), Value::Unit);
+    }
+
+    #[test]
+    fn grant_mints_a_capability_tagged_with_its_authority() {
+        let src = "fn main(root: Cap<Root>) -> Cap<Write> { return grant<Write>(root); }";
+        let result = writ_parser::parse(src);
+        // (The static checker would reject returning a capability; here we only
+        // exercise the runtime value that `grant` produces.)
+        let v = run_main(&result.module).unwrap();
+        assert_eq!(
+            v,
+            Value::Capability {
+                authority: "Write".to_string()
+            }
+        );
     }
 
     // --- contracts: runtime checking with blame (#26) ----------------------

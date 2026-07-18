@@ -16,6 +16,12 @@ pub enum Value {
         name: String,
         fields: Vec<Value>,
     },
+    /// An opaque, unforgeable capability token tagged with the authority it
+    /// grants (e.g. `"Root"`, `"Write"`). No surface syntax constructs one; the
+    /// runtime hands the root capability to `main`, and `grant` narrows it.
+    Capability {
+        authority: String,
+    },
     /// The value of a statement or a function with no return value.
     Unit,
 }
@@ -29,6 +35,7 @@ impl Value {
             Value::Bool(_) => "Bool",
             Value::Text(_) => "Text",
             Value::Variant { .. } => "variant",
+            Value::Capability { .. } => "capability",
             Value::Unit => "Unit",
         }
     }
@@ -41,6 +48,7 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Text(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
+            Value::Capability { authority } => write!(f, "<capability {authority}>"),
             Value::Variant { name, fields } => {
                 write!(f, "{name}")?;
                 if let Some((first, rest)) = fields.split_first() {

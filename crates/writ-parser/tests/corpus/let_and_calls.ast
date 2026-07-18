@@ -51,6 +51,7 @@ Module {
                                         end: 44,
                                     },
                                 },
+                                type_args: [],
                                 args: [
                                     Literal(
                                         Literal {
@@ -71,6 +72,7 @@ Module {
                                                 end: 49,
                                             },
                                         },
+                                        type_args: [],
                                         args: [
                                             Literal(
                                                 Literal {

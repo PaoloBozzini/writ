@@ -84,6 +84,7 @@ Module {
                                             end: 84,
                                         },
                                     },
+                                    type_args: [],
                                     args: [
                                         Identifier {
                                             name: "msg",

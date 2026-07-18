@@ -18,6 +18,15 @@ use crate::ty::Type;
 /// The built-in `print` accepts one argument of any type and returns `Unit`.
 const PRINT: &str = "print";
 
+/// The capability-narrowing built-in: `grant<A>(cap) -> Cap<A>`.
+const GRANT: &str = "grant";
+
+/// The type-head for a capability.
+const CAP: &str = "Cap";
+
+/// The authority of the root capability — narrows to any specific power.
+const ROOT: &str = "Root";
+
 /// Type-check a module, returning all type diagnostics in source order. An empty
 /// result means the module is well-typed.
 #[must_use]
@@ -42,6 +51,17 @@ fn signature_types(sig: &Signature) -> FnSig {
     FnSig {
         params: sig.params.iter().map(|p| Type::resolve(&p.ty)).collect(),
         ret: sig.return_type.as_ref().map_or(Type::Unit, Type::resolve),
+    }
+}
+
+/// If `ty` is a capability type `Cap<A>`, returns the authority name `A`.
+fn cap_authority(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Named { name, args } if name == CAP => match args.first() {
+            Some(Type::Named { name, .. }) => Some(name.as_str()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -280,7 +300,12 @@ impl<'m> Checker<'m> {
                 let rt = self.check_expr(right);
                 self.check_binary(*op, &lt, &rt, *span)
             }
-            Expr::Call { callee, args, span } => self.check_call(callee, args, *span),
+            Expr::Call {
+                callee,
+                type_args,
+                args,
+                span,
+            } => self.check_call(callee, type_args, args, *span),
             Expr::Match {
                 scrutinee,
                 arms,
@@ -412,6 +437,55 @@ impl<'m> Checker<'m> {
         }
     }
 
+    /// Type-check `grant<A>(cap)`: narrow a broader capability to authority `A`.
+    fn check_grant(
+        &mut self,
+        type_args: &[writ_ast::TypeExpr],
+        arg_types: &[Type],
+        span: Span,
+    ) -> Type {
+        if type_args.len() != 1 {
+            self.error(
+                "T0008",
+                span,
+                format!(
+                    "`grant` needs exactly one type argument, found {}",
+                    type_args.len()
+                ),
+            );
+            return Type::Error;
+        }
+        let target = &type_args[0].name;
+        if arg_types.len() != 1 {
+            self.error(
+                "T0004",
+                span,
+                format!("`grant` expects 1 argument, found {}", arg_types.len()),
+            );
+            return Type::Error;
+        }
+        // The source must be a capability, and narrowing may only shed authority:
+        // it is valid from the root capability, or as an identity (`Cap<A>` to
+        // `Cap<A>`).
+        match cap_authority(&arg_types[0]) {
+            Some(source) if source == ROOT || source == target => {}
+            Some(source) => self.error(
+                "T0009",
+                span,
+                format!("cannot narrow `Cap<{source}>` to `Cap<{target}>`: authority can only be shed, not amplified"),
+            ),
+            None => self.error(
+                "T0009",
+                span,
+                format!("`grant` requires a capability argument, found `{}`", arg_types[0]),
+            ),
+        }
+        Type::Named {
+            name: CAP.to_string(),
+            args: vec![Type::resolve(&type_args[0])],
+        }
+    }
+
     fn check_binary(&mut self, op: BinaryOp, lt: &Type, rt: &Type, span: Span) -> Type {
         use BinaryOp::*;
         match op {
@@ -445,13 +519,26 @@ impl<'m> Checker<'m> {
         }
     }
 
-    fn check_call(&mut self, callee: &Expr, args: &[Expr], span: Span) -> Type {
+    fn check_call(
+        &mut self,
+        callee: &Expr,
+        type_args: &[writ_ast::TypeExpr],
+        args: &[Expr],
+        span: Span,
+    ) -> Type {
         let arg_types: Vec<Type> = args.iter().map(|a| self.check_expr(a)).collect();
 
         let Expr::Identifier { name, .. } = callee else {
             self.error("T0003", span, "only named functions can be called");
             return Type::Error;
         };
+
+        // `grant<A>(cap)` narrows a capability to authority `A`. It is valid only
+        // from a broader capability — the root capability `Cap<Root>` — so
+        // authority can only ever be shed, never amplified.
+        if name == GRANT {
+            return self.check_grant(type_args, &arg_types, span);
+        }
 
         // A constructor call, e.g. `Some(x)`, builds a value of its sum type.
         if let Some((owner, arity)) = self
