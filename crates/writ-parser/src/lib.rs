@@ -402,6 +402,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Result<TypeExpr, Diagnostic> {
+        // A function type `fn(A, B) -> R`. It is represented as a `TypeExpr` whose
+        // head is the reserved word `fn` and whose args are the parameter types
+        // followed by the return type (always last). `fn` is a keyword, so this
+        // head can never collide with a user type name.
+        if self.peek() == &TokenKind::Keyword(Keyword::Fn) {
+            return self.parse_fn_type();
+        }
+
         let (name, span) = self.expect_ident_spanned("a type name")?;
         let mut end = span;
         let mut args = Vec::new();
@@ -422,6 +430,46 @@ impl<'a> Parser<'a> {
             name,
             args,
             span: span.merge(&end),
+        })
+    }
+
+    fn parse_fn_type(&mut self) -> Result<TypeExpr, Diagnostic> {
+        let start = self.advance().span; // `fn`
+        self.expect(&TokenKind::LParen, "`(` to open a function type")?;
+        let mut args = Vec::new();
+        if self.peek() != &TokenKind::RParen {
+            loop {
+                args.push(self.parse_type()?);
+                match self.peek() {
+                    TokenKind::Comma => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+        }
+        let rparen = self.expect(&TokenKind::RParen, "`)` to close a function type")?;
+        // The return type follows `->`; without it the function returns `Unit`.
+        let (ret, end) = if self.peek() == &TokenKind::Arrow {
+            self.advance();
+            let r = self.parse_type()?;
+            let sp = r.span;
+            (r, sp)
+        } else {
+            (
+                TypeExpr {
+                    name: "Unit".to_string(),
+                    args: Vec::new(),
+                    span: rparen,
+                },
+                rparen,
+            )
+        };
+        args.push(ret);
+        Ok(TypeExpr {
+            name: "fn".to_string(),
+            args,
+            span: start.merge(&end),
         })
     }
 
@@ -949,6 +997,22 @@ fn add(a: Int, b: Int) -> Int {
             f.body.stmts[1],
             Stmt::Return { value: Some(_), .. }
         ));
+    }
+
+    #[test]
+    fn parses_a_function_type_parameter() {
+        // `fn(Int) -> Int` is represented as a `TypeExpr` headed by `fn`, whose
+        // args are the parameter types followed by the return type (last).
+        let result = parse("fn apply(g: fn(Int) -> Text) { return; }");
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
+        let ty = &f.signature.params[0].ty;
+        assert_eq!(ty.name, "fn");
+        assert_eq!(ty.args.len(), 2, "one parameter type + the return type");
+        assert_eq!(ty.args[0].name, "Int");
+        assert_eq!(ty.args[1].name, "Text");
     }
 
     #[test]

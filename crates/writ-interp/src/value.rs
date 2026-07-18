@@ -22,6 +22,11 @@ pub enum Value {
     Capability {
         authority: String,
     },
+    /// A first-class function value: a reference to a top-level (pure) function
+    /// by name. There are no closures, so it carries no captured environment.
+    Function {
+        name: String,
+    },
     /// The value of a statement or a function with no return value.
     Unit,
 }
@@ -36,6 +41,7 @@ impl Value {
             Value::Text(_) => "Text",
             Value::Variant { .. } => "variant",
             Value::Capability { .. } => "capability",
+            Value::Function { .. } => "function",
             Value::Unit => "Unit",
         }
     }
@@ -49,6 +55,7 @@ impl fmt::Display for Value {
             Value::Text(s) => write!(f, "{s}"),
             Value::Unit => write!(f, "()"),
             Value::Capability { authority } => write!(f, "<capability {authority}>"),
+            Value::Function { name } => write!(f, "<function {name}>"),
             Value::Variant { name, fields } => {
                 write!(f, "{name}")?;
                 if let Some((first, rest)) = fields.split_first() {

@@ -132,3 +132,10 @@ fn a_lowered_contract_emits_a_trap() {
         "the lowered ensures becomes a blamed trap"
     );
 }
+
+#[test]
+fn higher_order_functions_are_refused_for_now() {
+    let m = lower_src("fn apply(g: fn(Int) -> Int, x: Int) -> Int { return g(x); }\nfn main() {}");
+    let err = emit_c(&m).expect_err("HOF not supported by the C back end yet");
+    assert!(err.message.contains("higher-order"), "{}", err.message);
+}

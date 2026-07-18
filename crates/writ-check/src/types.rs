@@ -117,12 +117,26 @@ fn check_duplicate_names(module: &Module) -> Vec<Diagnostic> {
 struct FnSig {
     params: Vec<Type>,
     ret: Type,
+    /// Whether the function performs no effects — only a pure function may be
+    /// used as a first-class value, so its effects cannot escape unchecked.
+    pure: bool,
+}
+
+impl FnSig {
+    /// The type of this function used as a value: `fn(params) -> ret`.
+    fn as_fn_type(&self) -> Type {
+        Type::Fn {
+            params: self.params.clone(),
+            ret: Box::new(self.ret.clone()),
+        }
+    }
 }
 
 fn signature_types(sig: &Signature) -> FnSig {
     FnSig {
         params: sig.params.iter().map(|p| Type::resolve(&p.ty)).collect(),
         ret: sig.return_type.as_ref().map_or(Type::Unit, Type::resolve),
+        pure: sig.effects.effects.is_empty(),
     }
 }
 
@@ -430,6 +444,25 @@ impl<'m> Checker<'m> {
                         name: owner,
                         args: vec![Type::Infer; ngen],
                     }
+                } else if let Some((pure, fn_ty)) = self
+                    .funcs
+                    .get(name.as_str())
+                    .map(|sig| (sig.pure, sig.as_fn_type()))
+                {
+                    // A top-level function used as a **value**. Only pure
+                    // functions may be first-class: an effectful function passed
+                    // as a value would let its effects be performed at a call
+                    // site the honesty/authority passes cannot see.
+                    if !pure {
+                        self.error(
+                            "T0015",
+                            *span,
+                            format!(
+                                "function `{name}` performs effects, so it cannot be used as a value (only pure functions can)"
+                            ),
+                        );
+                    }
+                    fn_ty
                 } else {
                     self.error("T0002", *span, format!("unknown variable `{name}`"));
                     Type::Error
@@ -882,6 +915,41 @@ impl<'m> Checker<'m> {
         }
     }
 
+    /// Check a call's arguments against a parameter list: arity, then each
+    /// argument's type. Shared by direct calls and higher-order calls.
+    fn check_arg_types(
+        &mut self,
+        name: &str,
+        params: &[Type],
+        arg_types: &[Type],
+        args: &[Expr],
+        span: Span,
+    ) {
+        if arg_types.len() != params.len() {
+            self.error(
+                "T0004",
+                span,
+                format!(
+                    "`{name}` expects {} argument(s), found {}",
+                    params.len(),
+                    arg_types.len()
+                ),
+            );
+        }
+        for (i, (param_ty, arg_ty)) in params.iter().zip(arg_types).enumerate() {
+            if !param_ty.compatible(arg_ty) {
+                self.error(
+                    "T0001",
+                    args[i].span(),
+                    format!(
+                        "argument {} to `{name}`: expected `{param_ty}`, found `{arg_ty}`",
+                        i + 1
+                    ),
+                );
+            }
+        }
+    }
+
     fn check_call(
         &mut self,
         callee: &Expr,
@@ -901,6 +969,26 @@ impl<'m> Checker<'m> {
                 return Type::Error;
             }
         };
+
+        // A **higher-order call**: the callee names a local or parameter that
+        // holds a function value. (A global function is not in scope as a local,
+        // so this only fires for function values; a local shadows a global.)
+        if let Some(ty) = self.lookup(name) {
+            return match ty {
+                Type::Fn { params, ret } => {
+                    self.check_arg_types(name, &params, &arg_types, args, span);
+                    *ret
+                }
+                other => {
+                    self.error(
+                        "T0003",
+                        span,
+                        format!("`{name}` is not a function (it has type `{other}`) and cannot be called"),
+                    );
+                    Type::Error
+                }
+            };
+        }
 
         // `grant<A>(cap)` narrows a capability to authority `A`. It is valid only
         // from a broader capability — the root capability `Cap<Root>` — so
