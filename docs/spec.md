@@ -163,6 +163,21 @@ that names the uncovered variants — exhaustiveness is a compile-time guarantee
 not a runtime check. A binding may not repeat within one pattern (`Pair(x, x)` is
 rejected).
 
+### The prelude
+
+Two sum types are always in scope, with no declaration or import — a **prelude**:
+
+```
+type Option<T> = Some(T) | None
+type Result<T, E> = Ok(T) | Err(E)
+```
+
+`Option<T>` models a value that may be absent (Writ has no null); `Result<T, E>`
+models a success (`Ok`) or a failure carrying a reason (`Err`). They are ordinary
+generic sum types — the checker and back ends give them no special treatment. A
+program that declares its own type of the same name **shadows** the prelude one,
+so nothing is forced on a program that wants its own.
+
 ### Text
 
 `Text` is a sequence of **Unicode scalar values**, so the text built-ins are
