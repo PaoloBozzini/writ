@@ -1,0 +1,36 @@
+// Custom-authority demo: capabilities are an OPEN system — you invent your own.
+//
+// `Audit` is not a built-in authority (unlike `Read`/`Write`). This program
+// *defines* it simply by naming it in `uses { Audit }` and `Cap<Audit>`. The
+// checker then enforces it exactly like any built-in capability: only code that
+// was handed a `Cap<Audit>` token may append to the audit trail, and every such
+// function must honestly declare `uses { Audit }`.
+
+// The one function that performs the "audit" effect. Declaring `uses { Audit }`
+// makes every call to it an effect site that requires a `Cap<Audit>` token.
+fn audit_log(trail: Cap<Audit>, entry: Text) uses { Audit } {
+    print(concat("[audit] ", entry));
+}
+
+// Fine: `record_login` was handed the audit capability and forwards it on.
+fn record_login(trail: Cap<Audit>, user: Text) uses { Audit } {
+    audit_log(trail, concat("login: ", user));
+}
+
+// `main` receives the master capability `Cap<Root>` from the runtime and narrows
+// it to the `Audit` authority with `grant`. Authority flows strictly downward,
+// through explicit arguments.
+fn main(root: Cap<Root>) uses { Audit } {
+    record_login(grant<Audit>(root), "alice");
+    audit_log(grant<Audit>(root), "system started");
+}
+
+// The rejection this buys you. `sneaky` looks harmless — it "just logs" — but it
+// was handed no `Cap<Audit>` and does not declare the effect, so it may not touch
+// the audit trail. Uncommenting it makes `writ check` refuse the program
+// (honesty E0101 + authority E0301) before it can run. There is no ambient audit
+// authority to reach for.
+//
+// fn sneaky(user: Text) {
+//     audit_log(user, concat("login: ", user));
+// }
