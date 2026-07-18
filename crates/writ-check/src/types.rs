@@ -27,6 +27,12 @@ const CAP: &str = "Cap";
 /// The authority of the root capability — narrows to any specific power.
 const ROOT: &str = "Root";
 
+/// The taint-removing built-in: `sanitize(Tainted<T>) -> T`.
+const SANITIZE: &str = "sanitize";
+
+/// The type-head marking untrusted data.
+const TAINTED: &str = "Tainted";
+
 /// Type-check a module, returning all type diagnostics in source order. An empty
 /// result means the module is well-typed.
 #[must_use]
@@ -538,6 +544,23 @@ impl<'m> Checker<'m> {
         // authority can only ever be shed, never amplified.
         if name == GRANT {
             return self.check_grant(type_args, &arg_types, span);
+        }
+
+        // `sanitize(x)` removes taint: `Tainted<T> -> T`. Sanitizing a value that
+        // is not tainted is a no-op on its type.
+        if name == SANITIZE {
+            if arg_types.len() != 1 {
+                self.error(
+                    "T0004",
+                    span,
+                    format!("`sanitize` expects 1 argument, found {}", arg_types.len()),
+                );
+                return Type::Error;
+            }
+            return match &arg_types[0] {
+                Type::Named { name, args } if name == TAINTED && args.len() == 1 => args[0].clone(),
+                other => other.clone(),
+            };
         }
 
         // A constructor call, e.g. `Some(x)`, builds a value of its sum type.

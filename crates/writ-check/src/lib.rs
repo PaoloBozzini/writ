@@ -12,11 +12,13 @@
 mod authority;
 mod capabilities;
 mod effects;
+mod taint;
 mod ty;
 mod types;
 
 pub use authority::check_authority;
 pub use capabilities::check_capabilities;
 pub use effects::check_effects;
+pub use taint::check_taint;
 pub use ty::Type;
 pub use types::check_types;

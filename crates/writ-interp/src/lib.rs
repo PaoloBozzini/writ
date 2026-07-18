@@ -29,6 +29,9 @@ const PRINT: &str = "print";
 /// The capability-narrowing built-in: `grant<A>(cap)`.
 const GRANT: &str = "grant";
 
+/// The taint-removing built-in (identity at runtime): `sanitize(x)`.
+const SANITIZE: &str = "sanitize";
+
 /// The type-head marking a capability parameter.
 const CAP: &str = "Cap";
 
@@ -202,6 +205,17 @@ impl<'m> Interpreter<'m> {
         // A user function of the same name would have shadowed it above.
         if name == PRINT {
             return self.builtin_print(args, span);
+        }
+        // `sanitize` is an identity at runtime — taint is a compile-time property
+        // with no runtime representation.
+        if name == SANITIZE {
+            let [value] = <[Value; 1]>::try_from(args).map_err(|args| {
+                RuntimeError::new(
+                    span,
+                    format!("`sanitize` expects 1 argument, got {}", args.len()),
+                )
+            })?;
+            return Ok(value);
         }
         Err(RuntimeError::new(
             span,
