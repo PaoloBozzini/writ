@@ -98,3 +98,48 @@ fn handle(input: Tainted<Text>) { log(input); }
     )
     .is_empty());
 }
+
+// --- Laundering via compound expressions (#98) ----------------------------
+
+#[test]
+fn a_match_wrapper_does_not_launder_taint() {
+    // Wrapping a tainted value in a `match` must not defeat E0401.
+    let cs = taint_codes(
+        "\
+fn run_query(q: Tainted<Text>) uses { Query } { return; }
+fn handle(input: Tainted<Text>) uses { Query } {
+    run_query(match true { _ => input });
+}
+",
+    );
+    assert_eq!(cs, vec!["E0401"], "match must not launder taint");
+}
+
+#[test]
+fn a_let_bound_match_wrapper_stays_tainted() {
+    // `let x = match ... { _ => tainted }` must mark `x` tainted.
+    let cs = taint_codes(
+        "\
+fn run_query(q: Tainted<Text>) uses { Query } { return; }
+fn handle(input: Tainted<Text>) uses { Query } {
+    let x = match true { _ => input };
+    run_query(x);
+}
+",
+    );
+    assert_eq!(cs, vec!["E0401"], "taint must survive a let-bound match");
+}
+
+#[test]
+fn a_binary_wrapper_does_not_launder_taint() {
+    // An operator over a tainted operand keeps the result tainted.
+    let cs = taint_codes(
+        "\
+fn run_query(q: Tainted<Bool>) uses { Query } { return; }
+fn handle(input: Tainted<Int>) uses { Query } {
+    run_query(input == input);
+}
+",
+    );
+    assert_eq!(cs, vec!["E0401"], "operators must not launder taint");
+}
