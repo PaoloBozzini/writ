@@ -72,6 +72,25 @@ fn main() { print(f(None)); }
 }
 
 #[test]
+fn emission_is_deterministic() {
+    // Codegen is a pure function of the AST: identical input → identical bytes.
+    // (Guards against hash-map iteration order or other nondeterminism leaking
+    // into output — the foundation of #30's byte-identical builds.)
+    let src = "\
+type Option<T> = Some(T) | None
+fn add(a: Int, b: Int) -> Int { return a + b; }
+fn pick(o: Option<Int>) -> Int { return match o { Some(x) => x, None => 0 }; }
+fn main() { print(add(1, 2)); print(pick(Some(3))); print(\"hi\"); }
+";
+    let m = lower_src(src);
+    assert_eq!(
+        emit_c(&m).unwrap(),
+        emit_c(&m).unwrap(),
+        "emission must be stable"
+    );
+}
+
+#[test]
 fn a_lowered_contract_emits_a_trap() {
     // After lowering, `ensures` is a `Check`; codegen turns it into a trap that
     // carries the interpreter's exact blame message.
