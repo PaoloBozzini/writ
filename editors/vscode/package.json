@@ -1,0 +1,56 @@
+{
+  "name": "writ-lang",
+  "displayName": "Writ Language",
+  "description": "Syntax highlighting and file icons for the Writ programming language.",
+  "version": "0.1.0",
+  "publisher": "writ",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PaoloBozzini/writ.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/PaoloBozzini/writ/issues"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Themes"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "writ",
+        "aliases": [
+          "Writ",
+          "writ"
+        ],
+        "extensions": [
+          ".writ"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/writ-file.svg",
+          "dark": "./icons/writ-file.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "writ",
+        "scopeName": "source.writ",
+        "path": "./syntaxes/writ.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "writ-icons",
+        "label": "Writ Icons",
+        "path": "./fileicons/writ-icon-theme.json"
+      }
+    ]
+  }
+}

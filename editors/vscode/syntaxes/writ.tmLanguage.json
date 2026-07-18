@@ -1,0 +1,82 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Writ",
+  "scopeName": "source.writ",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#function-def" },
+    { "include": "#function-call" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.writ",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.writ",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.writ",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.integer.writ",
+      "match": "\\b[0-9]+\\b"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.writ",
+          "match": "\\b(if|else|match|return)\\b"
+        },
+        {
+          "name": "keyword.declaration.writ",
+          "match": "\\b(fn|let|mut|type|import|export)\\b"
+        },
+        {
+          "comment": "Contract and capability clauses — Writ's two pillars.",
+          "name": "keyword.other.contract.writ",
+          "match": "\\b(uses|requires|ensures)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.boolean.writ",
+      "match": "\\b(true|false)\\b"
+    },
+    "types": {
+      "comment": "Convention: capitalized identifiers are types (Int, Text, Tainted).",
+      "name": "entity.name.type.writ",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "function-def": {
+      "match": "\\b(fn)\\s+([a-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.writ" },
+        "2": { "name": "entity.name.function.writ" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "name": "entity.name.function.call.writ"
+    },
+    "operators": {
+      "name": "keyword.operator.writ",
+      "match": "->|=>|==|!=|<=|>=|&&|\\|\\||[-+*/%<>=!|.]"
+    }
+  }
+}

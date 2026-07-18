@@ -8,3 +8,7 @@ rust-toolchain-*.tar.gz
 
 # Local editor / agent tooling (not part of the project)
 /.claude/
+
+# VS Code extension build artifacts
+editors/vscode/*.vsix
+editors/vscode/node_modules/

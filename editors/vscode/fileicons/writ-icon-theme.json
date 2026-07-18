@@ -1,0 +1,16 @@
+{
+  "iconDefinitions": {
+    "writ_file": {
+      "iconPath": "../icons/writ-file.svg"
+    }
+  },
+  "fileExtensions": {
+    "writ": "writ_file"
+  },
+  "fileNames": {},
+  "light": {
+    "fileExtensions": {
+      "writ": "writ_file"
+    }
+  }
+}
