@@ -180,16 +180,35 @@ fn main() {
 
 ### Sum types and `match`
 
-Sum types are the main compound type. They can be generic, and a `match` over
-one must be **exhaustive** — forgetting a case is a compile error, not a runtime
-surprise.
+A sum type is a value that is exactly one of several named shapes. You declare
+your own:
 
 ```writ
-type Option<T> = Some(T) | None
+type Shape = Circle(Int) | Rect(Int, Int)
+```
 
+A `match` splits on the shape — and must be **exhaustive**, so forgetting a case
+is a compile error, not a runtime surprise:
+
+```writ
+fn area(s: Shape) -> Int {
+    return match s {
+        Circle(r)  => 3 * r * r,
+        Rect(w, h) => w * h,   // `w` and `h` are bound to the payload, typed `Int`
+    };
+}
+```
+
+Two sum types are common enough to come **built in** (a prelude), so you use them
+without declaring anything:
+
+- `Option<T> = Some(T) | None` — a value that may be absent (Writ has no null).
+- `Result<T, E> = Ok(T) | Err(E)` — a success or a failure with a reason.
+
+```writ
 fn unwrap_or(o: Option<Int>, fallback: Int) -> Int {
     return match o {
-        Some(x) => x,       // `x` is bound to the payload, typed `Int`
+        Some(x) => x,
         None    => fallback,
     };
 }
@@ -200,9 +219,10 @@ fn main() {
 }
 ```
 
-Payload types are inferred: `Some(3)` is an `Option<Int>`, and a pattern from a
-different sum type — or a non-exhaustive match — is refused before the program
-runs.
+Payload types are inferred: `Some(3)` is an `Option<Int>`. A pattern from the
+wrong sum type, or a non-exhaustive match, is refused before the program runs.
+(You can still declare your own `Option` — a same-named type shadows the built-in
+one.)
 
 ### Text operations
 

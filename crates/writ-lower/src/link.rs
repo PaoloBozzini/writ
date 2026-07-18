@@ -15,7 +15,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use writ_ast::{Block, Expr, Function, Item, MatchArm, Module, Stmt};
+use writ_ast::{
+    Block, Expr, Function, Item, MatchArm, Module, Span, Stmt, TypeDecl, TypeExpr, Variant,
+};
 
 /// Flatten `modules` into a single module. `root` is the entry module whose
 /// names stay unqualified.
@@ -45,9 +47,90 @@ pub fn link(modules: &BTreeMap<String, Module>, root: &str) -> Module {
             }
         }
     }
+    add_prelude(&mut items);
+
     Module {
         imports: Vec::new(),
         items,
+    }
+}
+
+/// Prepend the **prelude** — the standard sum types that are always in scope
+/// (`Option<T>`, `Result<T, E>`) — so a program can use `Some` / `None` / `Ok` /
+/// `Err` without declaring or importing anything.
+///
+/// A prelude type is skipped when the program already declares a type of the
+/// same name, or a variant (constructor) of the same name, so a user-declared
+/// `Option` **shadows** the built-in and nothing is forced on a program that
+/// wants its own.
+fn add_prelude(items: &mut Vec<Item>) {
+    let type_names: BTreeSet<&str> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Type(t) => Some(t.name.as_str()),
+            Item::Function(_) => None,
+        })
+        .collect();
+    let variant_names: BTreeSet<&str> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Type(t) => Some(t),
+            Item::Function(_) => None,
+        })
+        .flat_map(|t| t.variants.iter().map(|v| v.name.as_str()))
+        .collect();
+
+    let mut prelude = Vec::new();
+    for decl in prelude_types() {
+        let collides = type_names.contains(decl.name.as_str())
+            || decl
+                .variants
+                .iter()
+                .any(|v| variant_names.contains(v.name.as_str()));
+        if !collides {
+            prelude.push(Item::Type(decl));
+        }
+    }
+    // Prepend so the prelude precedes user items in source-ordered diagnostics.
+    prelude.append(items);
+    *items = prelude;
+}
+
+/// The prelude type declarations, built directly as AST (they are ordinary
+/// generic sum types — the checker and back ends need no special knowledge of
+/// them).
+fn prelude_types() -> Vec<TypeDecl> {
+    // `type Option<T> = Some(T) | None`
+    let option = TypeDecl {
+        exported: false,
+        name: "Option".to_string(),
+        generics: vec!["T".to_string()],
+        variants: vec![variant("Some", &["T"]), variant("None", &[])],
+        span: Span::new(0, 0),
+    };
+    // `type Result<T, E> = Ok(T) | Err(E)`
+    let result = TypeDecl {
+        exported: false,
+        name: "Result".to_string(),
+        generics: vec!["T".to_string(), "E".to_string()],
+        variants: vec![variant("Ok", &["T"]), variant("Err", &["E"])],
+        span: Span::new(0, 0),
+    };
+    vec![option, result]
+}
+
+fn variant(name: &str, fields: &[&str]) -> Variant {
+    Variant {
+        name: name.to_string(),
+        fields: fields
+            .iter()
+            .map(|f| TypeExpr {
+                name: (*f).to_string(),
+                args: Vec::new(),
+                span: Span::new(0, 0),
+            })
+            .collect(),
+        span: Span::new(0, 0),
     }
 }
 
