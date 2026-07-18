@@ -1,0 +1,28 @@
+// Taint tracking: untrusted data cannot reach a sink until it is sanitized.
+//
+// Untrusted input has type `Tainted<T>`. A *sink* is a function that declares a
+// dangerous effect — here `uses { Query }`. The checker refuses a tainted value
+// at a sink unless it first passes the `sanitize` boundary, and no wrapper (a
+// `match`, an operator) can launder the taint around it.
+//
+// This program checks clean (`writ check sanitize.writ`). Uncommenting the
+// `unsafe_handle` below makes the taint checker refuse it (E0401).
+
+// A sink: it declares `uses { Query }`, so a tainted argument is rejected.
+fn run_query(db: Cap<Query>, sql: Text) uses { Query } {
+    return;
+}
+
+// Correct: the untrusted `input` is sanitized before it reaches the sink.
+fn handle(db: Cap<Query>, input: Tainted<Text>) uses { Query } {
+    run_query(db, sanitize(input));
+}
+
+// The rejection this buys you. `unsafe_handle` passes untrusted `input` straight
+// to the sink — refused with E0401 before it can run:
+//
+// fn unsafe_handle(db: Cap<Query>, input: Tainted<Text>) uses { Query } {
+//     run_query(db, input);
+// }
+
+fn main() {}

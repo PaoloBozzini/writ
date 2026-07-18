@@ -1,0 +1,41 @@
+// Text processing with the string built-ins.
+//
+// `Text` is a sequence of Unicode characters. `text_len` counts them, `char_at`
+// reads one, `concat` joins, and `char_code` / `code_char` convert between a
+// character and its numeric code — enough to build real string utilities by
+// recursion.
+
+// Reverse a text, one character at a time.
+fn reverse(s: Text) -> Text {
+    return rev_from(s, text_len(s), "");
+}
+fn rev_from(s: Text, i: Int, acc: Text) -> Text {
+    if i <= 0 {
+        return acc;
+    }
+    return rev_from(s, i - 1, concat(acc, char_at(s, i - 1)));
+}
+
+// Uppercase the ASCII lowercase letters in a text (leaving everything else).
+fn shout(s: Text) -> Text {
+    return shout_from(s, 0, text_len(s), "");
+}
+fn shout_from(s: Text, i: Int, n: Int, acc: Text) -> Text {
+    if i >= n {
+        return acc;
+    }
+    return shout_from(s, i + 1, n, concat(acc, upper(char_at(s, i))));
+}
+// 'a'..'z' are codes 97..122; subtracting 32 gives the uppercase letter.
+fn upper(c: Text) -> Text {
+    let code = char_code(c);
+    if (code >= 97) && (code <= 122) {
+        return code_char(code - 32);
+    }
+    return c;
+}
+
+fn main() {
+    print(reverse("Writ"));   // tirW
+    print(shout("hello!"));   // HELLO!
+}

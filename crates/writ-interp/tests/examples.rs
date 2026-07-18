@@ -38,6 +38,29 @@ fn factorial_runs_end_to_end() {
     assert_eq!(run_example("factorial.writ"), vec!["120".to_string()]);
 }
 
+#[test]
+fn option_example_matches_on_presence() {
+    assert_eq!(
+        run_example("option.writ"),
+        vec!["Some(5)", "None", "5", "0"]
+    );
+}
+
+#[test]
+fn shapes_example_computes_areas() {
+    assert_eq!(run_example("shapes.writ"), vec!["75", "12"]);
+}
+
+#[test]
+fn contract_example_runs_with_contracts_that_hold() {
+    assert_eq!(run_example("contract.writ"), vec!["7", "3", "5", "9"]);
+}
+
+#[test]
+fn text_example_processes_strings() {
+    assert_eq!(run_example("text.writ"), vec!["tirW", "HELLO!"]);
+}
+
 /// Parse the example at `name`, run `main` — handing it a root capability for
 /// each of its capability parameters, as the runtime does — and return the
 /// printed lines.
