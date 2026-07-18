@@ -19,4 +19,5 @@ writ-parser.workspace = true
 writ-check.workspace = true
 writ-lower.workspace = true
 writ-codegen.workspace = true
+writ-verify.workspace = true
 writ-interp.workspace = true

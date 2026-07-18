@@ -24,6 +24,7 @@ dependencies = [
  "writ-interp",
  "writ-lower",
  "writ-parser",
+ "writ-verify",
 ]
 
 [[package]]
@@ -65,4 +66,12 @@ version = "0.0.0"
 dependencies = [
  "writ-ast",
  "writ-lexer",
+]
+
+[[package]]
+name = "writ-verify"
+version = "0.0.0"
+dependencies = [
+ "writ-ast",
+ "writ-parser",
 ]

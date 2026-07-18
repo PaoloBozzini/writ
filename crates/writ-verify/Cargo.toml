@@ -1,0 +1,13 @@
+[package]
+name = "writ-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+writ-ast.workspace = true
+
+[dev-dependencies]
+# Test-only: parse real source so generation tests use the exact parsed tree.
+writ-parser.workspace = true
