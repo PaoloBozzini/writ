@@ -52,6 +52,12 @@ const CORPUS: &[&str] = &[
         print(char_code(\"A\")); print(code_char(97)); print(char_code(\"é\")); print(code_char(233));\n\
         print(code_char(char_code(\"Z\")));\n\
      }",
+    // Higher-order functions: pass and call pure function values.
+    "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
+     fn twice(g: fn(Int) -> Int, x: Int) -> Int { return g(g(x)); }\n\
+     fn inc(n: Int) -> Int { return n + 1; }\n\
+     fn double(n: Int) -> Int { return n * 2; }\n\
+     fn main() { print(apply(inc, 5)); print(twice(double, 3)); print(inc); }",
     // Nested match sub-patterns.
     "type Option<T> = Some(T) | None\n\
      type Pair = P(Int, Int)\n\
