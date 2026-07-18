@@ -9,6 +9,17 @@ implemented in **Rust**. Everything here serves one goal:
 When those two properties are in tension with brevity, cleverness, or
 convenience, they win.
 
+## Getting started
+
+New to Writ? Start with **[docs/getting-started.md](docs/getting-started.md)** —
+it takes you from building the toolchain to writing, running, compiling, and
+verifying real programs, with a feature-by-feature tour.
+
+```bash
+cargo run -p writ-cli -- run examples/hello.writ
+# Hello, Writ!
+```
+
 ## The two pillars
 
 Writ's safety rests on two **orthogonal** static checkers. They are independent
@@ -43,22 +54,38 @@ authority.
 
 ## Architecture
 
-Pipeline: **source → lexer → parser → AST → checkers → interpreter** (native
-codegen comes later; self-hosting later still).
+Pipeline: **source → lexer → parser → AST → checkers → lower → interpreter / C
+codegen** (self-hosting later still).
 
 | Crate | Role |
 | --- | --- |
 | `writ-ast` | Shared data types: the AST, plus `Span` and `Diagnostic`. Depends on nothing heavy. |
 | `writ-lexer` | Text → tokens, carrying byte spans. |
 | `writ-parser` | Tokens → AST, including `uses {...}` / `requires` / `ensures`. |
-| `writ-check` | All static analysis: types, effects, capabilities, contracts. Never imports the interpreter. |
+| `writ-check` | All static analysis: types, effects, capabilities, taint, contracts. Never imports a back end. |
+| `writ-lower` | AST → AST: links multi-module programs and desugars contracts into one shared form both back ends consume. |
 | `writ-interp` | Tree-walking evaluator. A back end, not the source of truth. |
+| `writ-codegen` | The native back end: emits C, compiled by the system C compiler. Agrees with the interpreter on a differential corpus. |
+| `writ-verify` | Optional SMT-backed contract proving (behind a solver trait). |
 | `writ-cli` | A thin driver — wiring only. |
 
-The dependency graph is **acyclic**; nothing depends on `writ-interp` or
-`writ-cli`.
+The dependency graph is **acyclic**; nothing depends on a back end (`writ-interp`
+/ `writ-codegen`) or `writ-cli`.
 
-## Building
+## Using it
+
+```bash
+writ check file.writ   # static checks only (runs nothing)
+writ run   file.writ   # check, then interpret `main`
+writ build file.writ   # check, then compile to a native binary (via C)
+writ verify file.writ  # check, then prove contracts via SMT (optional)
+```
+
+(Run through Cargo as `cargo run -p writ-cli -- <command> file.writ`, or
+`cargo install --path crates/writ-cli` for a `writ` binary.) See
+[docs/getting-started.md](docs/getting-started.md) for a full walkthrough.
+
+## Building from source
 
 ```bash
 cargo build
