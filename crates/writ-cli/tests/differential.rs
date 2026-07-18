@@ -40,6 +40,11 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Nested match sub-patterns.
+    "type Option<T> = Some(T) | None\n\
+     type Pair = P(Int, Int)\n\
+     fn f(o: Option<Pair>) -> Int { return match o { Some(P(a, b)) => a + b, None => 0 }; }\n\
+     fn main() { print(f(Some(P(3, 4)))); print(f(None)); }",
     // Capabilities: `grant` narrows authority; a capability prints opaquely.
     "fn write_line(out: Cap<Write>, msg: Text) uses { Write } { return; }\n\
      fn main(root: Cap<Root>) uses { Write } {\n\

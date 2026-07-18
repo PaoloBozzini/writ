@@ -55,9 +55,8 @@ fn main() { print(f(Some(5))); print(f(None)); }
 }
 
 #[test]
-fn nested_subpatterns_are_refused_for_now() {
-    // `Some(Some(x))` needs a nested test — not supported yet, but refused
-    // rather than mis-compiled.
+fn nested_subpatterns_emit_a_folded_condition() {
+    // `Some(Some(x))` tests both tags and reads the binding two levels deep.
     let m = lower_src(
         "\
 type Option<T> = Some(T) | None
@@ -67,8 +66,17 @@ fn f(o: Option<Option<Int>>) -> Int {
 fn main() { print(f(None)); }
 ",
     );
-    let err = emit_c(&m).expect_err("nested sub-patterns not supported yet");
-    assert!(err.message.contains("nested"), "{}", err.message);
+    let c = emit_c(&m).expect("nested sub-patterns emit");
+    // The outer and inner tags are both tested, and the binding reaches the
+    // inner field.
+    assert!(
+        c.contains("w_is(") && c.contains("&&"),
+        "folded tag tests: {c}"
+    );
+    assert!(
+        c.contains(".fields[0].fields[0]"),
+        "reads the nested field: {c}"
+    );
 }
 
 #[test]
