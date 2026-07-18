@@ -16,9 +16,15 @@ fn taint_codes(src: &str) -> Vec<String> {
 }
 
 const PROGRAM: &str = "\
+type Option<T> = Some(T) | None
+fn ok(s: Text) -> Bool { return true; }
 fn run_query(q: Text) uses { Query } { return; }
+fn nothing() { return; }
 fn handle(input: Tainted<Text>) uses { Query } {
-    run_query(sanitize(input));
+    match sanitize(input, ok) {
+        Some(clean) => run_query(clean),
+        None        => nothing(),
+    };
 }
 ";
 
@@ -32,8 +38,9 @@ fn sanitized_data_may_reach_a_sink() {
 }
 
 #[test]
-fn sanitize_type_checks_as_stripping_the_taint() {
-    // sanitize(Tainted<Text>) -> Text, which the sink `run_query` accepts.
+fn sanitize_type_checks_as_a_validated_boundary() {
+    // `sanitize(Tainted<Text>, fn(Text) -> Bool) -> Option<Text>`: the `Some`
+    // payload is trusted `Text`, which the sink `run_query` accepts.
     let parsed = writ_parser::parse(PROGRAM);
     assert!(
         check_types(&parsed.module).is_empty(),

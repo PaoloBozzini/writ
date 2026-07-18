@@ -999,18 +999,44 @@ impl<'m> Checker<'m> {
 
         // `sanitize(x)` removes taint: `Tainted<T> -> T`. Sanitizing a value that
         // is not tainted is a no-op on its type.
+        // `sanitize(x, is_valid)` is the taint boundary: it applies the (pure)
+        // validator `is_valid: fn(T) -> Bool` to the value inside `x:
+        // Tainted<T>` and returns `Some(x)` if it passes, else `None` — a real,
+        // rule-driven certification, not a no-op.
         if name == SANITIZE {
-            if arg_types.len() != 1 {
+            if arg_types.len() != 2 {
                 self.error(
                     "T0004",
                     span,
-                    format!("`sanitize` expects 1 argument, found {}", arg_types.len()),
+                    format!(
+                        "`sanitize` expects 2 arguments (a `Tainted<T>` and a validator `fn(T) -> Bool`), found {}",
+                        arg_types.len()
+                    ),
                 );
                 return Type::Error;
             }
-            return match &arg_types[0] {
+            // The trusted payload type: strip `Tainted<..>` if present.
+            let inner = match &arg_types[0] {
                 Type::Named { name, args } if name == TAINTED && args.len() == 1 => args[0].clone(),
                 other => other.clone(),
+            };
+            let want_validator = Type::Fn {
+                params: vec![inner.clone()],
+                ret: Box::new(Type::Bool),
+            };
+            if !arg_types[1].compatible(&want_validator) {
+                self.error(
+                    "T0001",
+                    args[1].span(),
+                    format!(
+                        "argument 2 to `sanitize`: expected a validator `{want_validator}`, found `{}`",
+                        arg_types[1]
+                    ),
+                );
+            }
+            return Type::Named {
+                name: "Option".to_string(),
+                args: vec![inner],
             };
         }
 

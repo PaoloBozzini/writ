@@ -363,16 +363,39 @@ impl<'m> Interpreter<'m> {
         if name == PRINT {
             return self.builtin_print(args, span);
         }
-        // `sanitize` is an identity at runtime — taint is a compile-time property
-        // with no runtime representation.
+        // `sanitize(value, validator)` applies the validator to the value and
+        // returns `Some(value)` if it accepts, else `None`. Taint has no runtime
+        // representation, so `value` is the plain value; the validator is a
+        // function value called on it.
         if name == SANITIZE {
-            let [value] = <[Value; 1]>::try_from(args).map_err(|args| {
+            let [value, validator] = <[Value; 2]>::try_from(args).map_err(|args| {
                 RuntimeError::new(
                     span,
-                    format!("`sanitize` expects 1 argument, got {}", args.len()),
+                    format!("`sanitize` expects 2 arguments, got {}", args.len()),
                 )
             })?;
-            return Ok(value);
+            let Value::Function { name: fname } = validator else {
+                return Err(RuntimeError::new(
+                    span,
+                    format!(
+                        "`sanitize`'s second argument must be a validator function, got {}",
+                        validator.type_name()
+                    ),
+                ));
+            };
+            let ok = self.call_by_name(&fname, vec![value.clone()], span)?;
+            let accepted = matches!(ok, Value::Bool(true));
+            return Ok(if accepted {
+                Value::Variant {
+                    name: "Some".to_string(),
+                    fields: vec![value],
+                }
+            } else {
+                Value::Variant {
+                    name: "None".to_string(),
+                    fields: Vec::new(),
+                }
+            });
         }
         if matches!(
             name,

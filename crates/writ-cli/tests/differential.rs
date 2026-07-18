@@ -52,6 +52,12 @@ const CORPUS: &[&str] = &[
         print(char_code(\"A\")); print(code_char(97)); print(char_code(\"é\")); print(code_char(233));\n\
         print(code_char(char_code(\"Z\")));\n\
      }",
+    // Validator-based sanitize: a rule accepts or rejects, yielding Some / None.
+    "fn is_short(s: Text) -> Bool { return text_len(s) < 6; }\n\
+     fn main() {\n\
+        print(match sanitize(\"hi\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
+        print(match sanitize(\"toolong\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
+     }",
     // Higher-order functions: pass and call pure function values.
     "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
      fn twice(g: fn(Int) -> Int, x: Int) -> Int { return g(g(x)); }\n\

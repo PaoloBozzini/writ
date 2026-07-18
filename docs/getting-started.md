@@ -324,21 +324,33 @@ enters a program.
 
 Untrusted input has the type `Tainted<T>`. A **sink** is a function that declares
 a dangerous effect (`uses { Query }` or `uses { Shell }`). A tainted value cannot
-reach a sink until it passes a `sanitize` boundary — wrapping it in a `match` or
+reach a sink until it passes the `sanitize` boundary — wrapping it in a `match` or
 any other expression does not launder it.
 
+`sanitize` does real work: `sanitize(x, is_valid)` applies your validation rule
+`is_valid: fn(T) -> Bool` and returns `Some(x)` if it accepts, `None` if it
+rejects — so you must handle the failure, and only the accepted value (now trusted
+`T`) can reach a sink.
+
 ```writ
+fn is_short(s: Text) -> Bool { return text_len(s) < 100; }
+
 fn run_query(db: Cap<Query>, sql: Text) uses { Query } { return; }
+fn nothing() { return; }
 
 fn handle(db: Cap<Query>, input: Tainted<Text>) uses { Query } {
-    run_query(db, sanitize(input));   // OK — sanitized
-    // run_query(db, input);          // would be refused (E0401)
+    match sanitize(input, is_short) {
+        Some(clean) => run_query(db, clean),  // certified — reaches the sink
+        None        => nothing(),             // rejected — never does
+    };
+    // run_query(db, input);   // would be refused (E0401): input is tainted
 }
 ```
 
 `run_query` is a sink because it declares `uses { Query }`; passing the tainted
-`input` straight to it is refused, and no wrapper (a `match`, say) can launder
-the taint around the `sanitize` boundary.
+`input` straight to it is refused (E0401), and no wrapper can launder the taint
+around the `sanitize` boundary. The validator must be **pure** (it can inspect the
+value but not exfiltrate it).
 
 ### File I/O via capabilities
 
