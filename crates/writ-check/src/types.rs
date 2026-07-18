@@ -317,6 +317,9 @@ impl<'m> Checker<'m> {
                 arms,
                 span,
             } => self.check_match(scrutinee, arms, *span),
+            // Resolving a member (`math.add`) to another module's item is the
+            // resolver's job; treat it as unknown here.
+            Expr::Member { .. } => Type::Error,
         }
     }
 

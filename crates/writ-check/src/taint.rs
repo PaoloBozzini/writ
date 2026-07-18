@@ -186,6 +186,7 @@ impl TaintChecker<'_> {
                     self.check_sinks(&arm.body);
                 }
             }
+            Expr::Member { base, .. } => self.check_sinks(base),
             Expr::Literal(_) | Expr::Identifier { .. } => {}
         }
     }

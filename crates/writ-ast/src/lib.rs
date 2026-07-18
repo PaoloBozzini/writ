@@ -14,8 +14,9 @@ mod id;
 mod span;
 
 pub use ast::{
-    BinaryOp, Block, Contract, Effect, EffectSet, Expr, Function, Item, Literal, LiteralKind,
-    MatchArm, Module, Param, Pattern, Signature, Stmt, TypeDecl, TypeExpr, UnaryOp, Variant,
+    BinaryOp, Block, Contract, Effect, EffectSet, Expr, Function, Import, Item, Literal,
+    LiteralKind, MatchArm, Module, Param, Pattern, Signature, Stmt, TypeDecl, TypeExpr, UnaryOp,
+    Variant,
 };
 pub use diagnostic::{diagnostics_to_json, Diagnostic, Severity};
 pub use id::NodeId;

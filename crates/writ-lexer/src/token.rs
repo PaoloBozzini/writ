@@ -17,6 +17,8 @@ pub enum Keyword {
     Else,
     Match,
     Type,
+    Import,
+    Export,
     True,
     False,
 }
@@ -37,6 +39,8 @@ impl Keyword {
             "else" => Keyword::Else,
             "match" => Keyword::Match,
             "type" => Keyword::Type,
+            "import" => Keyword::Import,
+            "export" => Keyword::Export,
             "true" => Keyword::True,
             "false" => Keyword::False,
             _ => return None,
@@ -87,6 +91,8 @@ pub enum TokenKind {
     Comma,
     Colon,
     Semicolon,
+    /// `.`, member access (e.g. `math.add`).
+    Dot,
 
     /// End of input. Carries a zero-width span at the end of the source.
     Eof,

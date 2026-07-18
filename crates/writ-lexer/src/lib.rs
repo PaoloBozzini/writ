@@ -120,6 +120,7 @@ impl<'a> Lexer<'a> {
             ',' => self.push(TokenKind::Comma, start, one),
             ':' => self.push(TokenKind::Colon, start, one),
             ';' => self.push(TokenKind::Semicolon, start, one),
+            '.' => self.push(TokenKind::Dot, start, one),
             '=' => {
                 if self.eat('=') {
                     self.push(TokenKind::EqEq, start, one + 1);

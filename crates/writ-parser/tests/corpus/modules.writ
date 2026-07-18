@@ -1,0 +1,9 @@
+import math
+
+export fn double(n: Int) -> Int {
+    return math.add(n, n);
+}
+
+fn secret(n: Int) -> Int {
+    return n;
+}
