@@ -47,6 +47,11 @@ const CORPUS: &[&str] = &[
         let u = \"héllo\";\n\
         print(text_len(u)); print(char_at(u, 1)); print(substring(u, 0, 2));\n\
      }",
+    // char_code / code_char round-trips, incl. a non-ASCII scalar.
+    "fn main() {\n\
+        print(char_code(\"A\")); print(code_char(97)); print(char_code(\"é\")); print(code_char(233));\n\
+        print(code_char(char_code(\"Z\")));\n\
+     }",
     // Nested match sub-patterns.
     "type Option<T> = Some(T) | None\n\
      type Pair = P(Int, Int)\n\

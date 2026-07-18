@@ -718,6 +718,8 @@ impl<'m> Checker<'m> {
             "text_len" => (vec![Type::Text], Type::Int),
             "char_at" => (vec![Type::Text, Type::Int], Type::Text),
             "substring" => (vec![Type::Text, Type::Int, Type::Int], Type::Text),
+            "char_code" => (vec![Type::Text], Type::Int),
+            "code_char" => (vec![Type::Int], Type::Text),
             _ => return None,
         };
         if arg_types.len() != params.len() {

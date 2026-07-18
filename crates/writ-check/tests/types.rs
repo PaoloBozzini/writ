@@ -486,3 +486,8 @@ fn char_at_needs_an_int_index() {
     let cs = codes("fn f() -> Text { return char_at(\"a\", \"b\"); }");
     assert_eq!(cs, vec!["T0001"], "index must be Int");
 }
+
+#[test]
+fn char_code_and_code_char_type_check() {
+    assert_ok("fn f() -> Text { return code_char(char_code(char_at(\"ab\", 0))); }");
+}

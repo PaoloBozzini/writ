@@ -257,6 +257,25 @@ impl<'m> Interpreter<'m> {
                     .collect();
                 Ok(Value::Text(sub))
             }
+            "char_code" => {
+                arity(1)?;
+                let c = text(&args[0])?
+                    .chars()
+                    .next()
+                    .ok_or_else(|| RuntimeError::new(span, "`char_code` of an empty text"))?;
+                Ok(Value::Int(i64::from(u32::from(c))))
+            }
+            "code_char" => {
+                arity(1)?;
+                let i = int(&args[0])?;
+                let c = u32::try_from(i)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .ok_or_else(|| {
+                        RuntimeError::new(span, format!("`code_char`: {i} is not a Unicode scalar"))
+                    })?;
+                Ok(Value::Text(c.to_string()))
+            }
             _ => unreachable!("dispatched only for text built-ins"),
         }
     }
@@ -355,7 +374,10 @@ impl<'m> Interpreter<'m> {
             })?;
             return Ok(value);
         }
-        if matches!(name, "concat" | "text_len" | "char_at" | "substring") {
+        if matches!(
+            name,
+            "concat" | "text_len" | "char_at" | "substring" | "char_code" | "code_char"
+        ) {
             return self.builtin_text(name, args, span);
         }
         if matches!(name, "read_file" | "write_file") {

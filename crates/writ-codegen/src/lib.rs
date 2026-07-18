@@ -169,6 +169,28 @@ static WValue w_substring(WValue s, WValue sv, WValue ev) {
     return w_text(r);
 }
 
+static WValue w_char_code(WValue s) {
+    const unsigned char *p = (const unsigned char *) s.s;
+    if (*p == 0) w_trap("char_code: empty text");
+    int64_t step = w_u8_step(p), cp;
+    if (step == 1) cp = p[0];
+    else if (step == 2) cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+    else if (step == 3) cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+    else cp = ((int64_t)(p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+    return w_int(cp);
+}
+static WValue w_code_char(WValue iv) {
+    int64_t c = iv.i;
+    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) w_trap("code_char: not a Unicode scalar");
+    char *r = malloc(5); int n = 0;
+    if (c < 0x80) { r[n++] = (char) c; }
+    else if (c < 0x800) { r[n++] = (char)(0xC0 | (c >> 6)); r[n++] = (char)(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) { r[n++] = (char)(0xE0 | (c >> 12)); r[n++] = (char)(0x80 | ((c >> 6) & 0x3F)); r[n++] = (char)(0x80 | (c & 0x3F)); }
+    else { r[n++] = (char)(0xF0 | (c >> 18)); r[n++] = (char)(0x80 | ((c >> 12) & 0x3F)); r[n++] = (char)(0x80 | ((c >> 6) & 0x3F)); r[n++] = (char)(0x80 | (c & 0x3F)); }
+    r[n] = 0;
+    return w_text(r);
+}
+
 /* File I/O. The capability argument carries no runtime data (its authority was
    checked statically); it is accepted and ignored. */
 static WValue w_read_file(WValue cap, WValue path) {
@@ -494,6 +516,8 @@ impl Emitter {
             "text_len" => Some(("w_text_len", 1)),
             "char_at" => Some(("w_char_at", 2)),
             "substring" => Some(("w_substring", 3)),
+            "char_code" => Some(("w_char_code", 1)),
+            "code_char" => Some(("w_code_char", 1)),
             "read_file" => Some(("w_read_file", 2)),
             "write_file" => Some(("w_write_file", 3)),
             _ => None,

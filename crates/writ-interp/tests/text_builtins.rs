@@ -79,3 +79,29 @@ fn substring_out_of_bounds_is_a_runtime_error() {
     assert!(err(r#"return substring("ab", 0, 9);"#).contains("out of bounds"));
     assert!(err(r#"return substring("ab", 2, 1);"#).contains("out of bounds"));
 }
+
+#[test]
+fn char_code_and_code_char_round_trip() {
+    assert_eq!(eval_int(r#"return char_code("A");"#), Value::Int(65));
+    assert_eq!(eval_int(r#"return char_code("0");"#), Value::Int(48));
+    // Non-ASCII: é is U+00E9 = 233.
+    assert_eq!(eval_int(r#"return char_code("é");"#), Value::Int(233));
+    assert_eq!(eval(r#"return code_char(97);"#), Value::Text("a".into()));
+    assert_eq!(eval(r#"return code_char(233);"#), Value::Text("é".into()));
+    assert_eq!(
+        eval(r#"return code_char(char_code("Z"));"#),
+        Value::Text("Z".into())
+    );
+}
+
+#[test]
+fn char_code_of_empty_text_is_a_runtime_error() {
+    assert!(err(r#"return code_char(char_code(""));"#).contains("empty"));
+}
+
+#[test]
+fn code_char_of_a_non_scalar_is_a_runtime_error() {
+    // 0xD800 is a surrogate — not a Unicode scalar value.
+    assert!(err(r#"return code_char(55296);"#).contains("scalar"));
+    assert!(err(r#"return code_char(-1);"#).contains("scalar"));
+}
