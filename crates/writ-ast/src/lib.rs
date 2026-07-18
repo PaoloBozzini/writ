@@ -10,6 +10,7 @@
 
 mod ast;
 mod diagnostic;
+mod id;
 mod span;
 
 pub use ast::{
@@ -17,4 +18,5 @@ pub use ast::{
     Module, Param, Signature, Stmt, TypeExpr, UnaryOp,
 };
 pub use diagnostic::{diagnostics_to_json, Diagnostic, Severity};
+pub use id::NodeId;
 pub use span::Span;
