@@ -1,0 +1,219 @@
+// A lexer for a subset of Writ, written in Writ — the first stage of the
+// self-hosted compiler (#34). It reads source text and produces a list of
+// tokens, using only shipped language features: sum types, recursion, `match`,
+// and the text built-ins (`text_len`, `char_at`, `char_code`, `substring`,
+// `concat`, `code_char`). No higher-order functions.
+//
+// It recognises integer literals, identifiers, whitespace (skipped), the
+// operators `+ - * /`, the punctuation `( ) { } ; ,`, the comparisons `< > ==`,
+// the assignment `=`, and the arrow `->`. Anything else becomes an `Unknown`
+// token carrying the offending character.
+
+export type Token =
+    Num(Int) | Ident(Text)
+  | LParen | RParen | LBrace | RBrace
+  | Plus | Minus | Star | Slash
+  | Semi | Comma | Arrow | EqEq | Eq | Lt | Gt
+  | Unknown(Text)
+
+// A list of tokens. (Self-contained so the lexer is one importable file.)
+export type TokList = TNil | TCons(Token, TokList)
+
+// The result of scanning a run: a value/text and the index just past it.
+type NumRes = NumR(Int, Int)
+type IdRes = IdR(Text, Int)
+
+// --- character classes (by Unicode scalar value) --------------------------
+
+fn is_space(code: Int) -> Bool {
+    return (code == 32) || (code == 10) || (code == 9) || (code == 13);
+}
+
+fn is_digit(code: Int) -> Bool {
+    return (code >= 48) && (code <= 57);
+}
+
+fn is_ident_start(code: Int) -> Bool {
+    return ((code >= 97) && (code <= 122)) || ((code >= 65) && (code <= 90)) || (code == 95);
+}
+
+fn is_ident_char(code: Int) -> Bool {
+    return is_ident_start(code) || is_digit(code);
+}
+
+// --- scanning runs --------------------------------------------------------
+
+// Scan a run of digits starting at `i`, folding them into `acc`.
+fn read_number(src: Text, i: Int, n: Int, acc: Int) -> NumRes {
+    if i >= n {
+        return NumR(acc, i);
+    }
+    let code = char_code(char_at(src, i));
+    if is_digit(code) {
+        return read_number(src, i + 1, n, acc * 10 + (code - 48));
+    }
+    return NumR(acc, i);
+}
+
+// Scan an identifier that began at `start`, currently looking at `i`.
+fn read_ident(src: Text, i: Int, n: Int, start: Int) -> IdRes {
+    if i >= n {
+        return IdR(substring(src, start, i), i);
+    }
+    let code = char_code(char_at(src, i));
+    if is_ident_char(code) {
+        return read_ident(src, i + 1, n, start);
+    }
+    return IdR(substring(src, start, i), i);
+}
+
+fn num_val(r: NumRes) -> Int {
+    return match r { NumR(v, e) => v };
+}
+fn num_end(r: NumRes) -> Int {
+    return match r { NumR(v, e) => e };
+}
+fn id_text(r: IdRes) -> Text {
+    return match r { IdR(s, e) => s };
+}
+fn id_end(r: IdRes) -> Int {
+    return match r { IdR(s, e) => e };
+}
+
+// --- punctuation ----------------------------------------------------------
+
+// Whether the character at `j` (if any) has scalar value `code`.
+fn next_is(src: Text, j: Int, n: Int, code: Int) -> Bool {
+    if j >= n {
+        return false;
+    }
+    return char_code(char_at(src, j)) == code;
+}
+
+// The single-character token for `code`, or `Unknown` for an unrecognised one
+// (reconstructed from the code point).
+fn single_token(code: Int) -> Token {
+    if code == 40 { return LParen; }
+    if code == 41 { return RParen; }
+    if code == 123 { return LBrace; }
+    if code == 125 { return RBrace; }
+    if code == 43 { return Plus; }
+    if code == 42 { return Star; }
+    if code == 47 { return Slash; }
+    if code == 59 { return Semi; }
+    if code == 44 { return Comma; }
+    if code == 60 { return Lt; }
+    if code == 62 { return Gt; }
+    return Unknown(code_char(code));
+}
+
+// Lex one operator/punctuation token (handling the two-character `->` and `==`),
+// then continue.
+fn lex_punct(src: Text, i: Int, n: Int, code: Int, acc: TokList) -> TokList {
+    if code == 45 {
+        if next_is(src, i + 1, n, 62) {
+            return lex_go(src, i + 2, n, TCons(Arrow, acc));
+        }
+        return lex_go(src, i + 1, n, TCons(Minus, acc));
+    }
+    if code == 61 {
+        if next_is(src, i + 1, n, 61) {
+            return lex_go(src, i + 2, n, TCons(EqEq, acc));
+        }
+        return lex_go(src, i + 1, n, TCons(Eq, acc));
+    }
+    return lex_go(src, i + 1, n, TCons(single_token(code), acc));
+}
+
+// --- the main loop --------------------------------------------------------
+
+// Tokens are consed onto `acc` in reverse, then reversed once at the end.
+fn lex_go(src: Text, i: Int, n: Int, acc: TokList) -> TokList {
+    if i >= n {
+        return acc;
+    }
+    let code = char_code(char_at(src, i));
+    if is_space(code) {
+        return lex_go(src, i + 1, n, acc);
+    }
+    if is_digit(code) {
+        let r = read_number(src, i, n, 0);
+        return lex_go(src, num_end(r), n, TCons(Num(num_val(r)), acc));
+    }
+    if is_ident_start(code) {
+        let r = read_ident(src, i, n, i);
+        return lex_go(src, id_end(r), n, TCons(Ident(id_text(r)), acc));
+    }
+    return lex_punct(src, i, n, code, acc);
+}
+
+// Reverse a token list.
+fn trev(xs: TokList, acc: TokList) -> TokList {
+    return match xs {
+        TNil => acc,
+        TCons(h, t) => trev(t, TCons(h, acc)),
+    };
+}
+
+// Tokenize `src` into a list of tokens in source order.
+export fn lex(src: Text) -> TokList {
+    return trev(lex_go(src, 0, text_len(src), TNil), TNil);
+}
+
+// --- rendering (for tests / debugging) ------------------------------------
+
+fn digit_text(d: Int) -> Text {
+    return code_char(48 + d);
+}
+
+// An integer as decimal text.
+export fn int_to_text(v: Int) -> Text {
+    if v < 0 {
+        return concat("-", int_to_text(0 - v));
+    }
+    if v < 10 {
+        return digit_text(v);
+    }
+    return concat(int_to_text(v / 10), digit_text(v - (v / 10) * 10));
+}
+
+// A token's display form.
+export fn token_to_text(t: Token) -> Text {
+    return match t {
+        Num(v) => concat("Num(", concat(int_to_text(v), ")")),
+        Ident(s) => concat("Ident(", concat(s, ")")),
+        LParen => "LParen",
+        RParen => "RParen",
+        LBrace => "LBrace",
+        RBrace => "RBrace",
+        Plus => "Plus",
+        Minus => "Minus",
+        Star => "Star",
+        Slash => "Slash",
+        Semi => "Semi",
+        Comma => "Comma",
+        Arrow => "Arrow",
+        EqEq => "EqEq",
+        Eq => "Eq",
+        Lt => "Lt",
+        Gt => "Gt",
+        Unknown(s) => concat("Unknown(", concat(s, ")")),
+    };
+}
+
+fn noop() {
+    return;
+}
+
+fn print_cons(h: Token, t: TokList) {
+    print(token_to_text(h));
+    print_tokens(t);
+}
+
+// Print each token on its own line.
+export fn print_tokens(xs: TokList) {
+    match xs {
+        TNil => noop(),
+        TCons(h, t) => print_cons(h, t),
+    };
+}
