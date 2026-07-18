@@ -15,10 +15,10 @@
 //! Covers `Int` / `Bool` / `Text`, the arithmetic / comparison / boolean
 //! operators (with the interpreter's checked overflow and division-by-zero
 //! semantics, and short-circuit `&&` / `||`), `let` / `if` / `return`, function
-//! calls, `print`, sum-type constructors and `match`, and lowered contract
-//! checks. Not yet supported: capability narrowing (`grant`) and nested
-//! sub-patterns inside a `match` arm — both are reported as a [`CodegenError`]
-//! rather than mis-compiled.
+//! calls, `print`, sum-type constructors and `match`, capabilities
+//! (`Cap<..>` parameters and `grant<A>(..)` narrowing), and lowered contract
+//! checks. Not yet supported: nested sub-patterns inside a `match` arm — it is
+//! reported as a [`CodegenError`] rather than mis-compiled.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -52,7 +52,7 @@ const PRELUDE: &str = r#"#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { W_INT, W_BOOL, W_UNIT, W_TEXT, W_VARIANT } WTag;
+typedef enum { W_INT, W_BOOL, W_UNIT, W_TEXT, W_VARIANT, W_CAP } WTag;
 typedef struct WValue WValue;
 struct WValue { WTag tag; int64_t i; const char *s; WValue *fields; int64_t nfields; };
 
@@ -60,6 +60,7 @@ static WValue w_int(int64_t x) { WValue v; v.tag = W_INT; v.i = x; v.s = 0; v.fi
 static WValue w_bool(int b) { WValue v; v.tag = W_BOOL; v.i = b ? 1 : 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
 static WValue w_unit(void) { WValue v; v.tag = W_UNIT; v.i = 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
 static WValue w_text(const char *s) { WValue v; v.tag = W_TEXT; v.i = 0; v.s = s; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_cap(const char *authority) { WValue v; v.tag = W_CAP; v.i = 0; v.s = authority; v.fields = 0; v.nfields = 0; return v; }
 static WValue w_variant(const char *name, WValue *fields, int64_t n) {
     WValue v; v.tag = W_VARIANT; v.i = 0; v.s = name; v.nfields = n;
     if (n > 0) { v.fields = malloc(sizeof(WValue) * (size_t) n); for (int64_t k = 0; k < n; k++) v.fields[k] = fields[k]; }
@@ -85,7 +86,7 @@ static int w_equal(WValue a, WValue b) {
     if (a.tag != b.tag) return 0;
     switch (a.tag) {
         case W_INT: case W_BOOL: case W_UNIT: return a.i == b.i;
-        case W_TEXT: return strcmp(a.s, b.s) == 0;
+        case W_TEXT: case W_CAP: return strcmp(a.s, b.s) == 0;
         case W_VARIANT:
             if (strcmp(a.s, b.s) != 0 || a.nfields != b.nfields) return 0;
             for (int64_t k = 0; k < a.nfields; k++) if (!w_equal(a.fields[k], b.fields[k])) return 0;
@@ -102,6 +103,7 @@ static void w_fprint(FILE *f, WValue v) {
         case W_BOOL: fprintf(f, "%s", v.i ? "true" : "false"); break;
         case W_UNIT: fprintf(f, "()"); break;
         case W_TEXT: fprintf(f, "%s", v.s); break;
+        case W_CAP: fprintf(f, "<capability %s>", v.s); break;
         case W_VARIANT:
             fprintf(f, "%s", v.s);
             if (v.nfields > 0) {
@@ -181,12 +183,30 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         e.out.push_str("}\n\n");
     }
 
-    // The C entry point calls Writ's `main`, handing each parameter a unit
-    // placeholder — capability parameters carry no runtime data (there are no
-    // effectful built-ins), so `main` never inspects them.
+    // The C entry point calls Writ's `main`, handing the runtime's root
+    // capability to each capability parameter (tagged with the authority it
+    // grants) and a unit placeholder to anything else — mirroring how the
+    // interpreter starts `main`.
     e.out.push_str("int main(void) {\n");
-    let args = vec!["w_unit()"; main.signature.params.len()].join(", ");
-    let _ = writeln!(e.out, "    {}({});", cname(&main.signature.name), args);
+    let args: Vec<String> = main
+        .signature
+        .params
+        .iter()
+        .map(|p| {
+            if p.ty.name == "Cap" {
+                let authority = p.ty.args.first().map_or("Root", |a| a.name.as_str());
+                format!("w_cap(\"{authority}\")")
+            } else {
+                "w_unit()".to_string()
+            }
+        })
+        .collect();
+    let _ = writeln!(
+        e.out,
+        "    {}({});",
+        cname(&main.signature.name),
+        args.join(", ")
+    );
     e.out.push_str("    return 0;\n}\n");
 
     Ok(e.out)
@@ -326,8 +346,11 @@ impl Emitter {
                 })
             }
             Expr::Call {
-                callee, args, span, ..
-            } => self.emit_call(callee, args, *span),
+                callee,
+                type_args,
+                args,
+                span,
+            } => self.emit_call(callee, type_args, args, *span),
             Expr::Match {
                 scrutinee,
                 arms,
@@ -343,6 +366,7 @@ impl Emitter {
     fn emit_call(
         &mut self,
         callee: &Expr,
+        type_args: &[writ_ast::TypeExpr],
         args: &[Expr],
         span: Span,
     ) -> Result<String, CodegenError> {
@@ -386,11 +410,17 @@ impl Emitter {
                 .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
             return Ok(format!("({arg})"));
         }
+        // `grant<A>(cap)` narrows authority to `A`. Capabilities carry no
+        // runtime effect (there are no effectful built-ins), so it just yields
+        // an opaque capability tagged with the authority `A` — matching the
+        // interpreter. The source capability argument is a pure reference and
+        // need not be re-evaluated.
         if name == "grant" {
-            return Err(CodegenError::new(
-                span,
-                "capability narrowing (`grant`) is not supported by the C back end yet",
-            ));
+            let authority = type_args
+                .first()
+                .map(|t| t.name.as_str())
+                .ok_or_else(|| CodegenError::new(span, "`grant` needs one type argument"))?;
+            return Ok(format!("w_cap(\"{authority}\")"));
         }
         Ok(format!("{}({})", cname(name), emitted.join(", ")))
     }

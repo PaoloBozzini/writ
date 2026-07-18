@@ -40,6 +40,13 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Capabilities: `grant` narrows authority; a capability prints opaquely.
+    "fn write_line(out: Cap<Write>, msg: Text) uses { Write } { return; }\n\
+     fn main(root: Cap<Root>) uses { Write } {\n\
+        write_line(grant<Write>(root), \"hi\");\n\
+        print(\"done\");\n\
+        print(grant<Write>(root));\n\
+     }",
 ];
 
 fn cc() -> String {
