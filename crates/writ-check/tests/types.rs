@@ -429,3 +429,32 @@ fn f(o: Option<Int>) -> Int {
 ",
     );
 }
+
+// --- Interpreter backstops as static checks (#104) ------------------------
+
+#[test]
+fn a_duplicate_pattern_binder_is_rejected() {
+    let cs = codes(
+        "\
+type Pair = P(Int, Int)
+fn f(p: Pair) -> Int { return match p { P(x, x) => x }; }
+",
+    );
+    assert_eq!(cs, vec!["T0013"], "P(x, x) binds `x` twice");
+}
+
+#[test]
+fn a_non_capability_main_parameter_is_rejected() {
+    let cs = codes("fn main(n: Int) { print(n); }");
+    assert_eq!(cs, vec!["T0014"], "main may take only capabilities");
+}
+
+#[test]
+fn a_capability_main_parameter_is_allowed() {
+    assert_ok("fn main(root: Cap<Root>) { return; }");
+}
+
+#[test]
+fn a_no_argument_main_is_allowed() {
+    assert_ok("fn main() { return; }");
+}

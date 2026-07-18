@@ -38,6 +38,7 @@ const TAINTED: &str = "Tainted";
 #[must_use]
 pub fn check_types(module: &Module) -> Vec<Diagnostic> {
     let mut diagnostics = check_duplicate_names(module);
+    diagnostics.extend(check_main_signature(module));
     let mut checker = Checker::new(module);
     for item in &module.items {
         let Item::Function(f) = item else {
@@ -46,6 +47,33 @@ pub fn check_types(module: &Module) -> Vec<Diagnostic> {
         checker.check_function(&f.signature, &f.body);
     }
     diagnostics.append(&mut checker.diagnostics);
+    diagnostics
+}
+
+/// `main` is the entry point: the runtime hands it the root capability for each
+/// capability parameter, and `Unit` for anything else — so a non-capability
+/// `main` parameter would silently receive a meaningless `Unit`. Refuse it
+/// instead: `main` may take only capability parameters (`T0014`).
+fn check_main_signature(module: &Module) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for item in &module.items {
+        let Item::Function(f) = item else { continue };
+        if f.signature.name != "main" {
+            continue;
+        }
+        for param in &f.signature.params {
+            if param.ty.name != CAP {
+                diagnostics.push(Diagnostic::error(
+                    "T0014",
+                    param.span,
+                    format!(
+                        "parameter `{}` of `main` must be a capability: `main` receives only capabilities from the runtime, found `{}`",
+                        param.name, param.ty.name
+                    ),
+                ));
+            }
+        }
+    }
     diagnostics
 }
 
@@ -465,6 +493,8 @@ impl<'m> Checker<'m> {
 
         for arm in arms {
             self.scopes.push(HashMap::new());
+            let mut binders = HashSet::new();
+            self.check_pattern_binders(&arm.pattern, &mut binders);
             self.collect_pattern(
                 &arm.pattern,
                 &scrutinee_ty,
@@ -517,6 +547,32 @@ impl<'m> Checker<'m> {
         }
 
         result_ty.unwrap_or(Type::Error)
+    }
+
+    /// Reject a binder name that appears more than once in a single pattern
+    /// (e.g. `Pair(x, x)`), which would otherwise silently keep the first
+    /// binding and drop the second. Recurses through nested sub-patterns.
+    fn check_pattern_binders(&mut self, pattern: &writ_ast::Pattern, seen: &mut HashSet<String>) {
+        use writ_ast::Pattern;
+        match pattern {
+            Pattern::Wildcard { .. } => {}
+            Pattern::Ident { name, span } => {
+                // Only a real binding (not a nullary-variant name) introduces a
+                // binder.
+                if !self.ctors.contains_key(name.as_str()) && !seen.insert(name.clone()) {
+                    self.error(
+                        "T0013",
+                        *span,
+                        format!("binding `{name}` appears more than once in this pattern"),
+                    );
+                }
+            }
+            Pattern::Variant { args, .. } => {
+                for sub in args {
+                    self.check_pattern_binders(sub, seen);
+                }
+            }
+        }
     }
 
     /// Record which variants an arm's pattern covers, binding any pattern
