@@ -19,6 +19,7 @@ the answer is right) and never speak about authority.
 - [2. Type system](#2-type-system)
 - [3. Capabilities](#3-capabilities-authority)
 - [4. Contracts](#4-contracts-correctness)
+- [5. Modules](#5-modules)
 
 ---
 
@@ -134,6 +135,73 @@ narrowing (`grant`), the authority check at effect sites, and taint tracking.
 
 *To be specified:* the contract expression language, runtime checking with
 blame, and the optional SMT-backed static verification pass.
+
+---
+
+## 5. Modules
+
+A program is a collection of **named modules**. Each source file is one module;
+the build driver assembles the module set from files. Modules give the language
+multi-file programs — a prerequisite for anything larger than a toy, including
+self-hosting the compiler in Writ.
+
+Modules interact with **both pillars**, so they are a language-design concern,
+not mere packaging. The governing principle is the same one the whole language
+rests on: **nothing is visible or reachable across a boundary unless it is
+explicitly handed across.** A module is the locality boundary — the
+module-level twin of "unreachable by default."
+
+### Imports and exports
+
+- A file may begin with `import <name>` declarations, each naming another module
+  to bring into scope. Imports come first, before any item.
+- A top-level item (`fn` or `type`) is private to its module unless prefixed with
+  `export`. Only exported items are visible to importers.
+- A qualified access `module.item` reaches an item in an imported module.
+
+Visibility is enforced by the resolver pass (`writ-check`), which is
+self-contained and imports no other checker. Its rules, with stable diagnostic
+codes:
+
+- **`R0001`** — every `import` must name a module that exists.
+- **`R0002`** — the base of a `module.member` access must be an imported module.
+- **`R0003`** — the named item must exist in that module.
+- **`R0004`** — the named item must be `export`ed. Using a **private** item
+  across a boundary is refused — the module-level form of "unreachable by
+  default."
+- **`R0005`** — the import graph must be **acyclic**; a cycle is refused.
+
+Diagnostics are emitted in deterministic (module-sorted) order, per the
+diagnostics-are-an-API rule.
+
+### Capabilities across boundaries
+
+Modules require **no special capability machinery**, and that is by design.
+Capabilities are **parameter-only and second-class** (§3): a `Cap<T>` can only
+be received as a parameter and passed on as an argument — never returned,
+stored, or captured. Those rules are *signature-local*, so they hold identically
+whether a call stays within a module or crosses into an imported one.
+
+The consequence is the property that matters: **a module cannot ambiently
+re-export authority.** Importing a module grants access to its exported
+*signatures*, never to any capability — there is no capability value a module
+could expose, because none can be constructed, returned, or stored. Authority
+still flows in exactly one way — downward, as an explicit argument at a call —
+and a boundary changes nothing about that. A module with no capability parameter
+threaded into it remains sandboxed by construction.
+
+### Effects across boundaries
+
+An exported signature's `uses {...}` set is its **honest, public declaration** of
+what it may do. A caller in another module sees exactly that declaration, and the
+authority check applies at the cross-module call's effect site just as it does
+locally: the caller must hold a capability for each declared effect. The honesty
+check, in turn, holds the *callee's* body to its own declaration within its own
+module. Neither check needs to know a call crossed a boundary — effects are
+carried on signatures, and signatures are what crosses.
+
+*To be specified:* the module-naming scheme the driver derives from file paths,
+whether re-exports are permitted, and selective/aliased imports.
 
 ---
 
