@@ -48,6 +48,13 @@ compile."
 Effects live in the type system: a signature tells you what a function can do.
 Sum types with **exhaustive `match`** ensure every case is handled.
 
+**Text is a sequence of Unicode scalar values.** The text built-ins index by
+code point, not byte: `text_len(s)` counts scalar values, `char_at(s, i)`
+returns the i-th one as a one-character `Text`, `substring(s, start, end)` slices
+the half-open char range, and `concat(a, b)` joins. Out-of-range `char_at` /
+`substring` is a runtime error. Both back ends implement identical char-based
+semantics (the C back end carries a small UTF-8 decoder).
+
 *To be specified:* primitive and compound types, sum types and exhaustiveness,
 the effect rows carried by signatures, and the absence of implicit conversions.
 

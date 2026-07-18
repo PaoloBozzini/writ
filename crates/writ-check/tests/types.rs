@@ -458,3 +458,31 @@ fn a_capability_main_parameter_is_allowed() {
 fn a_no_argument_main_is_allowed() {
     assert_ok("fn main() { return; }");
 }
+
+// --- Text built-ins (#122) ------------------------------------------------
+
+#[test]
+fn text_builtins_type_check() {
+    assert_ok(
+        "\
+fn f() -> Int {
+    let s = concat(\"a\", \"b\");
+    let c = char_at(s, 0);
+    let sub = substring(s, 0, 1);
+    return text_len(concat(c, sub));
+}
+",
+    );
+}
+
+#[test]
+fn a_text_builtin_with_a_wrong_argument_type_is_rejected() {
+    let cs = codes("fn f() -> Int { return text_len(42); }");
+    assert_eq!(cs, vec!["T0001"], "text_len needs Text");
+}
+
+#[test]
+fn char_at_needs_an_int_index() {
+    let cs = codes("fn f() -> Text { return char_at(\"a\", \"b\"); }");
+    assert_eq!(cs, vec!["T0001"], "index must be Int");
+}

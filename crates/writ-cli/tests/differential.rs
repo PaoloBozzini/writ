@@ -40,6 +40,13 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Text built-ins, including a multi-byte (UTF-8) string.
+    "fn main() {\n\
+        let s = concat(\"hel\", \"lo\");\n\
+        print(s); print(text_len(s)); print(char_at(s, 0)); print(substring(s, 1, 4));\n\
+        let u = \"héllo\";\n\
+        print(text_len(u)); print(char_at(u, 1)); print(substring(u, 0, 2));\n\
+     }",
     // Nested match sub-patterns.
     "type Option<T> = Some(T) | None\n\
      type Pair = P(Int, Int)\n\
