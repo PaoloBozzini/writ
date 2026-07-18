@@ -65,19 +65,50 @@ pub fn load_program(root_path: &Path) -> (Program, Vec<Diagnostic>) {
     (Program { modules, root }, diagnostics)
 }
 
-/// Run every static check over a program, returning all diagnostics in a stable
-/// order. An empty result means the program is accepted.
+/// The independent check passes, in run order. Each is its own module in
+/// `writ-check` with no cross-pass imports, so any subset can run alone.
+pub const PASSES: &[&str] = &[
+    "resolution",
+    "types",
+    "effects",
+    "authority",
+    "capabilities",
+    "taint",
+];
+
+/// Run every static check over a program.
 #[must_use]
 pub fn check(program: &Program) -> Vec<Diagnostic> {
-    let mut diagnostics = writ_check::check_resolution(&program.modules);
-    // Per-module checks (each pass is module-local; the resolver handles the
-    // cross-module surface).
+    check_passes(program, &[])
+}
+
+/// Run only the named passes (an empty selection runs them all), demonstrating
+/// that the passes are independent — each can run without the others. Returns
+/// diagnostics in a stable order.
+#[must_use]
+pub fn check_passes(program: &Program, passes: &[String]) -> Vec<Diagnostic> {
+    let enabled = |name: &str| passes.is_empty() || passes.iter().any(|p| p == name);
+    let mut diagnostics = Vec::new();
+    // The resolver is the one cross-module pass; the rest are module-local.
+    if enabled("resolution") {
+        diagnostics.extend(writ_check::check_resolution(&program.modules));
+    }
     for module in program.modules.values() {
-        diagnostics.extend(writ_check::check_types(module));
-        diagnostics.extend(writ_check::check_effects(module));
-        diagnostics.extend(writ_check::check_authority(module));
-        diagnostics.extend(writ_check::check_capabilities(module));
-        diagnostics.extend(writ_check::check_taint(module));
+        if enabled("types") {
+            diagnostics.extend(writ_check::check_types(module));
+        }
+        if enabled("effects") {
+            diagnostics.extend(writ_check::check_effects(module));
+        }
+        if enabled("authority") {
+            diagnostics.extend(writ_check::check_authority(module));
+        }
+        if enabled("capabilities") {
+            diagnostics.extend(writ_check::check_capabilities(module));
+        }
+        if enabled("taint") {
+            diagnostics.extend(writ_check::check_taint(module));
+        }
     }
     diagnostics
 }
