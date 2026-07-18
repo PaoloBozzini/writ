@@ -93,15 +93,24 @@ impl TaintChecker<'_> {
     }
 
     /// Whether an expression evaluates to a tainted value.
+    ///
+    /// Taint is tracked **structurally**, not syntactically: wrapping a tainted
+    /// value in any compound expression keeps it tainted, so a `match`/`if`/
+    /// operator cannot launder it past a sink. Only two things clear taint — a
+    /// `sanitize(..)` call and a call to a function not declared to return
+    /// `Tainted<T>` (its result type, not its arguments, decides).
     fn is_tainted(&self, expr: &Expr) -> bool {
         match expr {
             Expr::Identifier { name, .. } => self.is_tainted_name(name),
             Expr::Call { callee, .. } => {
                 let Expr::Identifier { name, .. } = callee.as_ref() else {
+                    // A cross-module (`Expr::Member`) callee's taint is decided
+                    // once linking makes it a qualified identifier; here, treat
+                    // an unresolved callee as untainted.
                     return false;
                 };
                 // `sanitize` strips taint; another function taints only if it is
-                // declared to return `Tainted<T>`.
+                // declared to return `Tainted<T>` — independent of its arguments.
                 name != SANITIZE
                     && self
                         .returns_tainted
@@ -109,7 +118,13 @@ impl TaintChecker<'_> {
                         .copied()
                         .unwrap_or(false)
             }
-            _ => false,
+            // A `match` result is tainted if any arm it could pick is tainted.
+            Expr::Match { arms, .. } => arms.iter().any(|a| self.is_tainted(&a.body)),
+            // Operators propagate taint from either operand.
+            Expr::Binary { left, right, .. } => self.is_tainted(left) || self.is_tainted(right),
+            Expr::Unary { operand, .. } => self.is_tainted(operand),
+            Expr::Member { base, .. } => self.is_tainted(base),
+            Expr::Literal(_) => false,
         }
     }
 
