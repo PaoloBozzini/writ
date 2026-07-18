@@ -375,3 +375,57 @@ fn duplicate_variant_within_one_type_is_a_static_error() {
     let cs = codes("type A = Dup | Dup\nfn main() {}");
     assert_eq!(cs, vec!["T0011"]);
 }
+
+// --- Match patterns must belong to the scrutinee's type (#102) ------------
+
+#[test]
+fn an_alien_variant_pattern_is_rejected() {
+    // `Some` belongs to `Option`, not `Color`; matching it on a `Color` is a
+    // compile error even with a catch-all present.
+    let cs = codes(
+        "\
+type Color = Red | Green | Blue
+type Option = Some(Int) | None
+fn f(c: Color) -> Int {
+    return match c {
+        Some(x) => x,
+        _ => 0,
+    };
+}
+",
+    );
+    assert_eq!(cs, vec!["T0012"], "alien Some pattern on a Color");
+}
+
+#[test]
+fn an_alien_nullary_pattern_is_rejected() {
+    let cs = codes(
+        "\
+type Color = Red | Green | Blue
+type Flag = On | Off
+fn f(c: Color) -> Int {
+    return match c {
+        Red => 1,
+        On  => 2,
+        _   => 0,
+    };
+}
+",
+    );
+    assert_eq!(cs, vec!["T0012"], "alien On pattern on a Color");
+}
+
+#[test]
+fn native_patterns_of_the_scrutinee_type_still_check() {
+    assert_ok(
+        "\
+type Option<T> = Some(T) | None
+fn f(o: Option<Int>) -> Int {
+    return match o {
+        Some(x) => x,
+        None    => 0,
+    };
+}
+",
+    );
+}
