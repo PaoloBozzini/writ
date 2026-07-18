@@ -213,7 +213,8 @@ of the same name). The pure ones take no capability:
 - `concat(Text, Text) -> Text`, `text_len(Text) -> Int`,
   `char_at(Text, Int) -> Text`, `substring(Text, Int, Int) -> Text`,
   `char_code(Text) -> Int`, `code_char(Int) -> Text`.
-- `sanitize(Tainted<T>) -> T` — the taint boundary (§3).
+- `sanitize(Tainted<T>, fn(T) -> Bool) -> Option<T>` — the taint boundary (§3):
+  applies the validator and returns `Some` if it accepts, else `None`.
 - `grant<A>(Cap<..>) -> Cap<A>` — capability narrowing (§3).
 
 The effectful built-ins take a capability and declare an effect:
@@ -245,7 +246,8 @@ the same order.
   checker enforces two things: the caller **holds** the capability (authority)
   and the signature **declared** the effect (honesty).
 - Untrusted data is `Tainted<T>` and cannot reach a **sink** (shell, query)
-  without passing a `sanitize` boundary.
+  without passing a `sanitize` boundary — which applies a caller-supplied
+  validation rule and yields `Some` (accepted) or `None` (rejected).
 
 ### Escape semantics (ARCH-02): capabilities are second-class
 

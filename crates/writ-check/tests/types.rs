@@ -531,3 +531,36 @@ fn calling_a_function_value_checks_its_arguments() {
     let cs = codes("fn apply(f: fn(Int) -> Int) -> Int { return f(true); }\nfn main() {}");
     assert_eq!(cs, vec!["T0001"]);
 }
+
+// --- Validator-based sanitize (#135) --------------------------------------
+
+#[test]
+fn sanitize_takes_a_validator_and_returns_option() {
+    assert_ok(
+        "type Option<T> = Some(T) | None\n\
+         fn ok(s: Text) -> Bool { return true; }\n\
+         fn f(input: Tainted<Text>) -> Text {\n\
+            return match sanitize(input, ok) { Some(x) => x, None => \"\" };\n\
+         }",
+    );
+}
+
+#[test]
+fn sanitize_rejects_a_wrongly_typed_validator() {
+    // The validator must be `fn(Text) -> Bool`; `fn(Int) -> Bool` is refused.
+    let cs = codes(
+        "type Option<T> = Some(T) | None\n\
+         fn bad(n: Int) -> Bool { return true; }\n\
+         fn f(input: Tainted<Text>) { let r = sanitize(input, bad); }",
+    );
+    assert!(
+        cs.contains(&"T0001".to_string()),
+        "wrong validator type: {cs:?}"
+    );
+}
+
+#[test]
+fn sanitize_needs_a_validator_argument() {
+    let cs = codes("fn f(input: Tainted<Text>) { let r = sanitize(input); }");
+    assert_eq!(cs, vec!["T0004"]);
+}

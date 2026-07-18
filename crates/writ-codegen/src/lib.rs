@@ -523,11 +523,19 @@ impl Emitter {
                 .ok_or_else(|| CodegenError::new(span, "`print` expects 1 argument"))?;
             return Ok(format!("w_print({arg})"));
         }
+        // `sanitize(value, validator)` applies the validator and yields
+        // `Some(value)` / `None`, via a statement-expression.
         if name == "sanitize" {
-            let arg = emitted
-                .first()
-                .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
-            return Ok(format!("({arg})"));
+            if emitted.len() != 2 {
+                return Err(CodegenError::new(span, "`sanitize` expects 2 arguments"));
+            }
+            let id = self.fresh();
+            return Ok(format!(
+                "({{ WValue _s{id}_v = {}; WValue _s{id}_f = {}; \
+                 w_as_bool(((WValue(*)(WValue))_s{id}_f.fn)(_s{id}_v)) \
+                 ? w_variant(\"Some\", (WValue[]){{_s{id}_v}}, 1) : w_variant(\"None\", 0, 0); }})",
+                emitted[0], emitted[1]
+            ));
         }
         // Text and file-I/O built-ins map to runtime helpers.
         if let Some(helper) = match name.as_str() {
