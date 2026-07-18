@@ -537,9 +537,15 @@ impl<'m> Checker<'m> {
     ) -> Type {
         let arg_types: Vec<Type> = args.iter().map(|a| self.check_expr(a)).collect();
 
-        let Expr::Identifier { name, .. } = callee else {
-            self.error("T0003", span, "only named functions can be called");
-            return Type::Error;
+        let name = match callee {
+            Expr::Identifier { name, .. } => name,
+            // A `module.item(..)` call is resolved and typed across modules by
+            // the resolver; the local type checker treats its result as unknown.
+            Expr::Member { .. } => return Type::Error,
+            _ => {
+                self.error("T0003", span, "only named functions can be called");
+                return Type::Error;
+            }
         };
 
         // `grant<A>(cap)` narrows a capability to authority `A`. It is valid only

@@ -1,0 +1,8 @@
+// An imported module: `add` is exported, `secret` is private.
+export fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn secret() -> Int {
+    return 42;
+}

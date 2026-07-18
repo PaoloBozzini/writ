@@ -1,0 +1,6 @@
+// Root module: imports `math` and calls its exported `add` across the boundary.
+import math
+
+fn main() {
+    print(math.add(2, 3));
+}
