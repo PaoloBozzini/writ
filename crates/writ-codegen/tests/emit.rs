@@ -33,27 +33,42 @@ fn a_program_without_main_is_refused() {
 }
 
 #[test]
-fn text_is_refused_for_now() {
-    let m = lower_src(r#"fn main() { print("hi"); }"#);
-    let err = emit_c(&m).expect_err("text not supported yet");
-    assert!(err.message.contains("text"), "{}", err.message);
+fn text_emits_an_escaped_c_literal() {
+    let m = lower_src(r#"fn main() { print("a\"b"); }"#);
+    let c = emit_c(&m).expect("text emits");
+    // The embedded quote is escaped for the C string literal.
+    assert!(c.contains(r#"w_text("a\"b")"#), "escaped text literal: {c}");
 }
 
 #[test]
-fn match_is_refused_for_now() {
+fn sum_type_and_match_emit() {
     let m = lower_src(
         "\
-type Option = Some(Int) | None
-fn f(o: Option) -> Int { return match o { Some(x) => x, None => 0 }; }
+type Option<T> = Some(T) | None
+fn f(o: Option<Int>) -> Int { return match o { Some(x) => x, None => 0 }; }
+fn main() { print(f(Some(5))); print(f(None)); }
+",
+    );
+    let c = emit_c(&m).expect("sum types + match emit");
+    assert!(c.contains("w_variant(\"Some\""), "constructor call: {c}");
+    assert!(c.contains("w_is("), "match tests the variant tag: {c}");
+}
+
+#[test]
+fn nested_subpatterns_are_refused_for_now() {
+    // `Some(Some(x))` needs a nested test — not supported yet, but refused
+    // rather than mis-compiled.
+    let m = lower_src(
+        "\
+type Option<T> = Some(T) | None
+fn f(o: Option<Option<Int>>) -> Int {
+    return match o { Some(Some(x)) => x, Some(None) => 0, None => 0 };
+}
 fn main() { print(f(None)); }
 ",
     );
-    let err = emit_c(&m).expect_err("match not supported yet");
-    assert!(
-        err.message.contains("match") || err.message.contains("constructor"),
-        "{}",
-        err.message
-    );
+    let err = emit_c(&m).expect_err("nested sub-patterns not supported yet");
+    assert!(err.message.contains("nested"), "{}", err.message);
 }
 
 #[test]

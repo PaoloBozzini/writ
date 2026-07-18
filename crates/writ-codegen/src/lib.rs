@@ -12,17 +12,20 @@
 //! single contract semantics.
 //!
 //! ## Scope
-//! This first increment covers the **core** language: `Int` / `Bool`, the
-//! arithmetic / comparison / boolean operators (with the interpreter's checked
-//! overflow and division-by-zero semantics, and short-circuit `&&` / `||`),
-//! `let` / `if` / `return`, function calls, `print`, and lowered contract
-//! checks. Constructs not yet supported (`Text`, sum types, `match`, capability
-//! narrowing) are reported as a [`CodegenError`] rather than mis-compiled;
-//! they land in a follow-up.
+//! Covers `Int` / `Bool` / `Text`, the arithmetic / comparison / boolean
+//! operators (with the interpreter's checked overflow and division-by-zero
+//! semantics, and short-circuit `&&` / `||`), `let` / `if` / `return`, function
+//! calls, `print`, sum-type constructors and `match`, and lowered contract
+//! checks. Not yet supported: capability narrowing (`grant`) and nested
+//! sub-patterns inside a `match` arm — both are reported as a [`CodegenError`]
+//! rather than mis-compiled.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use writ_ast::{BinaryOp, Blame, Block, Expr, Item, LiteralKind, Module, Span, Stmt, UnaryOp};
+use writ_ast::{
+    BinaryOp, Blame, Block, Expr, Item, LiteralKind, Module, Pattern, Span, Stmt, UnaryOp,
+};
 
 /// A construct the back end cannot yet emit, anchored to its source span.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,17 +45,27 @@ impl CodegenError {
 
 /// The C runtime prelude: the tagged `WValue` and the operator helpers. Every
 /// helper reproduces the interpreter's semantics exactly — checked arithmetic,
-/// division-by-zero traps, and the interpreter's value formatting for `print`.
+/// division-by-zero traps, structural equality, and the interpreter's value
+/// formatting for `print`.
 const PRELUDE: &str = r#"#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-typedef enum { W_INT, W_BOOL, W_UNIT } WTag;
-typedef struct { WTag tag; int64_t i; } WValue;
+typedef enum { W_INT, W_BOOL, W_UNIT, W_TEXT, W_VARIANT } WTag;
+typedef struct WValue WValue;
+struct WValue { WTag tag; int64_t i; const char *s; WValue *fields; int64_t nfields; };
 
-static WValue w_int(int64_t x) { WValue v; v.tag = W_INT; v.i = x; return v; }
-static WValue w_bool(int b) { WValue v; v.tag = W_BOOL; v.i = b ? 1 : 0; return v; }
-static WValue w_unit(void) { WValue v; v.tag = W_UNIT; v.i = 0; return v; }
+static WValue w_int(int64_t x) { WValue v; v.tag = W_INT; v.i = x; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_bool(int b) { WValue v; v.tag = W_BOOL; v.i = b ? 1 : 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_unit(void) { WValue v; v.tag = W_UNIT; v.i = 0; v.s = 0; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_text(const char *s) { WValue v; v.tag = W_TEXT; v.i = 0; v.s = s; v.fields = 0; v.nfields = 0; return v; }
+static WValue w_variant(const char *name, WValue *fields, int64_t n) {
+    WValue v; v.tag = W_VARIANT; v.i = 0; v.s = name; v.nfields = n;
+    if (n > 0) { v.fields = malloc(sizeof(WValue) * (size_t) n); for (int64_t k = 0; k < n; k++) v.fields[k] = fields[k]; }
+    else v.fields = 0;
+    return v;
+}
 static int w_as_bool(WValue v) { return v.i != 0; }
 
 static void w_trap(const char *msg) { fprintf(stderr, "%s\n", msg); exit(1); }
@@ -68,27 +81,58 @@ static WValue w_lt(WValue a, WValue b) { return w_bool(a.i < b.i); }
 static WValue w_le(WValue a, WValue b) { return w_bool(a.i <= b.i); }
 static WValue w_gt(WValue a, WValue b) { return w_bool(a.i > b.i); }
 static WValue w_ge(WValue a, WValue b) { return w_bool(a.i >= b.i); }
-static WValue w_eq(WValue a, WValue b) { return w_bool(a.tag == b.tag && a.i == b.i); }
-static WValue w_ne(WValue a, WValue b) { return w_bool(!(a.tag == b.tag && a.i == b.i)); }
-static WValue w_print(WValue v) {
-    switch (v.tag) {
-        case W_INT: printf("%lld\n", (long long) v.i); break;
-        case W_BOOL: printf("%s\n", v.i ? "true" : "false"); break;
-        case W_UNIT: printf("()\n"); break;
+static int w_equal(WValue a, WValue b) {
+    if (a.tag != b.tag) return 0;
+    switch (a.tag) {
+        case W_INT: case W_BOOL: case W_UNIT: return a.i == b.i;
+        case W_TEXT: return strcmp(a.s, b.s) == 0;
+        case W_VARIANT:
+            if (strcmp(a.s, b.s) != 0 || a.nfields != b.nfields) return 0;
+            for (int64_t k = 0; k < a.nfields; k++) if (!w_equal(a.fields[k], b.fields[k])) return 0;
+            return 1;
     }
-    return w_unit();
+    return 0;
 }
+static WValue w_eq(WValue a, WValue b) { return w_bool(w_equal(a, b)); }
+static WValue w_ne(WValue a, WValue b) { return w_bool(!w_equal(a, b)); }
+static int w_is(WValue v, const char *name) { return v.tag == W_VARIANT && strcmp(v.s, name) == 0; }
+static void w_fprint(FILE *f, WValue v) {
+    switch (v.tag) {
+        case W_INT: fprintf(f, "%lld", (long long) v.i); break;
+        case W_BOOL: fprintf(f, "%s", v.i ? "true" : "false"); break;
+        case W_UNIT: fprintf(f, "()"); break;
+        case W_TEXT: fprintf(f, "%s", v.s); break;
+        case W_VARIANT:
+            fprintf(f, "%s", v.s);
+            if (v.nfields > 0) {
+                fprintf(f, "(");
+                for (int64_t k = 0; k < v.nfields; k++) { if (k) fprintf(f, ", "); w_fprint(f, v.fields[k]); }
+                fprintf(f, ")");
+            }
+            break;
+    }
+}
+static WValue w_print(WValue v) { w_fprint(stdout, v); printf("\n"); return w_unit(); }
 "#;
 
 /// Emit a complete C translation unit for `module`.
 ///
-/// The module must be **checked** and **lowered** (contracts already desugared
-/// into `Stmt::Check`) and **linked** into a single module (no imports).
+/// The module must be **checked**, **lowered** (contracts desugared into
+/// `Stmt::Check`), and **linked** into a single module (no imports).
 ///
 /// # Errors
 /// Returns a [`CodegenError`] if the module uses a construct this back end does
 /// not yet support, or has no `main` function.
 pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
+    let mut ctors: HashMap<String, usize> = HashMap::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item {
+            for v in &decl.variants {
+                ctors.insert(v.name.clone(), v.fields.len());
+            }
+        }
+    }
+
     let funcs: Vec<_> = module
         .items
         .iter()
@@ -103,46 +147,335 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         .find(|f| f.signature.name == "main")
         .ok_or_else(|| CodegenError::new(Span::new(0, 0), "no `main` function to build"))?;
 
-    let mut out = String::new();
-    out.push_str(PRELUDE);
-    out.push('\n');
+    let mut e = Emitter {
+        ctors,
+        out: String::new(),
+        counter: 0,
+    };
+    e.out.push_str(PRELUDE);
+    e.out.push('\n');
 
     // Forward declarations, so call order does not matter.
     for f in &funcs {
         let _ = writeln!(
-            out,
+            e.out,
             "static WValue {};",
             proto(&f.signature.name, f.signature.params.len())
         );
     }
-    out.push('\n');
+    e.out.push('\n');
 
     // Definitions.
     for f in &funcs {
         let _ = writeln!(
-            out,
+            e.out,
             "static WValue {} {{",
             proto(&f.signature.name, f.signature.params.len())
         );
-        // Bind parameters to their local C names.
         for (i, p) in f.signature.params.iter().enumerate() {
-            let _ = writeln!(out, "    WValue {} = p{};", local(&p.name), i);
+            let _ = writeln!(e.out, "    WValue {} = p{};", local(&p.name), i);
         }
-        emit_block(&f.body, 1, &mut out)?;
-        // A Unit-returning path that falls off the end still yields a value.
-        out.push_str("    return w_unit();\n");
-        out.push_str("}\n\n");
+        e.emit_block(&f.body, 1)?;
+        // A path that falls off the end still yields a value.
+        e.out.push_str("    return w_unit();\n");
+        e.out.push_str("}\n\n");
     }
 
     // The C entry point calls Writ's `main`, handing each parameter a unit
     // placeholder — capability parameters carry no runtime data (there are no
     // effectful built-ins), so `main` never inspects them.
-    out.push_str("int main(void) {\n");
+    e.out.push_str("int main(void) {\n");
     let args = vec!["w_unit()"; main.signature.params.len()].join(", ");
-    let _ = writeln!(out, "    {}({});", cname(&main.signature.name), args);
-    out.push_str("    return 0;\n}\n");
+    let _ = writeln!(e.out, "    {}({});", cname(&main.signature.name), args);
+    e.out.push_str("    return 0;\n}\n");
 
-    Ok(out)
+    Ok(e.out)
+}
+
+struct Emitter {
+    /// Sum-type constructor name → arity, so a name can be classified as a
+    /// constructor (vs a function or a variable).
+    ctors: HashMap<String, usize>,
+    out: String,
+    /// A monotonic counter for unique temporary names (e.g. per `match`).
+    counter: usize,
+}
+
+impl Emitter {
+    fn fresh(&mut self) -> usize {
+        let n = self.counter;
+        self.counter += 1;
+        n
+    }
+
+    fn emit_block(&mut self, block: &Block, level: usize) -> Result<(), CodegenError> {
+        for stmt in &block.stmts {
+            self.emit_stmt(stmt, level)?;
+        }
+        Ok(())
+    }
+
+    fn emit_stmt(&mut self, stmt: &Stmt, level: usize) -> Result<(), CodegenError> {
+        match stmt {
+            Stmt::Let { name, value, .. } => {
+                let v = self.emit_expr(value)?;
+                indent(level, &mut self.out);
+                let _ = writeln!(self.out, "WValue {} = {};", local(name), v);
+            }
+            Stmt::Expr(e) => {
+                let v = self.emit_expr(e)?;
+                indent(level, &mut self.out);
+                let _ = writeln!(self.out, "{v};");
+            }
+            Stmt::Return { value, .. } => {
+                let v = match value {
+                    Some(e) => self.emit_expr(e)?,
+                    None => "w_unit()".to_string(),
+                };
+                indent(level, &mut self.out);
+                let _ = writeln!(self.out, "return {v};");
+            }
+            Stmt::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                let c = self.emit_expr(cond)?;
+                indent(level, &mut self.out);
+                let _ = writeln!(self.out, "if (w_as_bool({c})) {{");
+                self.emit_block(then_block, level + 1)?;
+                indent(level, &mut self.out);
+                self.out.push('}');
+                if let Some(else_block) = else_block {
+                    self.out.push_str(" else {\n");
+                    self.emit_block(else_block, level + 1)?;
+                    indent(level, &mut self.out);
+                    self.out.push('}');
+                }
+                self.out.push('\n');
+            }
+            // A lowered contract check. Trapping reproduces the interpreter's
+            // exact message, so runtime failures read identically across engines.
+            Stmt::Check {
+                predicate, blame, ..
+            } => {
+                let p = self.emit_expr(predicate)?;
+                let msg = match blame {
+                    Blame::Caller => "precondition violated (blame: caller)",
+                    Blame::Implementation => "postcondition violated (blame: implementation)",
+                };
+                indent(level, &mut self.out);
+                let _ = writeln!(self.out, "if (!w_as_bool({p})) w_trap(\"{msg}\");");
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_expr(&mut self, expr: &Expr) -> Result<String, CodegenError> {
+        match expr {
+            Expr::Literal(lit) => match &lit.kind {
+                LiteralKind::Int(n) => Ok(format!("w_int({n})")),
+                LiteralKind::Bool(b) => Ok(format!("w_bool({})", i32::from(*b))),
+                LiteralKind::Text(s) => Ok(format!("w_text(\"{}\")", c_escape(s))),
+            },
+            Expr::Identifier { name, span } => {
+                // A bare name that is a nullary constructor is a sum-type value;
+                // any other uppercase name that is not a known constructor is an
+                // error; otherwise it is a local/parameter.
+                if let Some(arity) = self.ctors.get(name).copied() {
+                    if arity != 0 {
+                        return Err(CodegenError::new(
+                            *span,
+                            format!("constructor `{name}` expects {arity} argument(s)"),
+                        ));
+                    }
+                    return Ok(format!("w_variant(\"{name}\", 0, 0)"));
+                }
+                Ok(local(name))
+            }
+            Expr::Unary { op, operand, .. } => {
+                let inner = self.emit_expr(operand)?;
+                Ok(match op {
+                    UnaryOp::Neg => format!("w_neg({inner})"),
+                    UnaryOp::Not => format!("w_not({inner})"),
+                })
+            }
+            Expr::Binary {
+                op, left, right, ..
+            } => {
+                let l = self.emit_expr(left)?;
+                let r = self.emit_expr(right)?;
+                Ok(match op {
+                    // Short-circuit operators emit C `&&` / `||` so a
+                    // side-effecting right operand is skipped as the interpreter
+                    // skips it.
+                    BinaryOp::And => format!("w_bool(w_as_bool({l}) && w_as_bool({r}))"),
+                    BinaryOp::Or => format!("w_bool(w_as_bool({l}) || w_as_bool({r}))"),
+                    BinaryOp::Add => format!("w_add({l}, {r})"),
+                    BinaryOp::Sub => format!("w_sub({l}, {r})"),
+                    BinaryOp::Mul => format!("w_mul({l}, {r})"),
+                    BinaryOp::Div => format!("w_div({l}, {r})"),
+                    BinaryOp::Rem => format!("w_rem({l}, {r})"),
+                    BinaryOp::Lt => format!("w_lt({l}, {r})"),
+                    BinaryOp::Le => format!("w_le({l}, {r})"),
+                    BinaryOp::Gt => format!("w_gt({l}, {r})"),
+                    BinaryOp::Ge => format!("w_ge({l}, {r})"),
+                    BinaryOp::Eq => format!("w_eq({l}, {r})"),
+                    BinaryOp::Ne => format!("w_ne({l}, {r})"),
+                })
+            }
+            Expr::Call {
+                callee, args, span, ..
+            } => self.emit_call(callee, args, *span),
+            Expr::Match {
+                scrutinee,
+                arms,
+                span,
+            } => self.emit_match(scrutinee, arms, *span),
+            Expr::Member { span, .. } => Err(CodegenError::new(
+                *span,
+                "member access is not supported by the C back end yet",
+            )),
+        }
+    }
+
+    fn emit_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<String, CodegenError> {
+        let Expr::Identifier { name, .. } = callee else {
+            return Err(CodegenError::new(
+                span,
+                "only named functions can be called in the C back end yet",
+            ));
+        };
+        let emitted: Vec<String> = args
+            .iter()
+            .map(|a| self.emit_expr(a))
+            .collect::<Result<_, _>>()?;
+
+        // A constructor call builds a sum-type value.
+        if let Some(arity) = self.ctors.get(name).copied() {
+            if emitted.len() != arity {
+                return Err(CodegenError::new(
+                    span,
+                    format!("constructor `{name}` expects {arity} argument(s)"),
+                ));
+            }
+            return Ok(format!(
+                "w_variant(\"{name}\", (WValue[]){{{}}}, {})",
+                emitted.join(", "),
+                emitted.len()
+            ));
+        }
+
+        // Built-ins. `print` writes a line; `sanitize` is a runtime identity
+        // (taint is a compile-time property with no runtime representation).
+        if name == "print" {
+            let arg = emitted
+                .first()
+                .ok_or_else(|| CodegenError::new(span, "`print` expects 1 argument"))?;
+            return Ok(format!("w_print({arg})"));
+        }
+        if name == "sanitize" {
+            let arg = emitted
+                .first()
+                .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
+            return Ok(format!("({arg})"));
+        }
+        if name == "grant" {
+            return Err(CodegenError::new(
+                span,
+                "capability narrowing (`grant`) is not supported by the C back end yet",
+            ));
+        }
+        Ok(format!("{}({})", cname(name), emitted.join(", ")))
+    }
+
+    /// Emit a `match` as a GNU statement-expression: bind the scrutinee once,
+    /// then a chain of `if`/`else if` — one per arm — assigns the matching arm's
+    /// body to a result temporary. Exhaustiveness is already checked statically;
+    /// the trailing `else` traps to mirror the interpreter's runtime error.
+    fn emit_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[writ_ast::MatchArm],
+        _span: Span,
+    ) -> Result<String, CodegenError> {
+        let id = self.fresh();
+        let scrut = format!("_m{id}_s");
+        let res = format!("_m{id}_r");
+        let scrut_expr = self.emit_expr(scrutinee)?;
+
+        let mut body = String::new();
+        let _ = write!(body, "WValue {scrut} = {scrut_expr}; WValue {res}; ");
+
+        for (i, arm) in arms.iter().enumerate() {
+            let keyword = if i == 0 { "if" } else { "else if" };
+            let (cond, bindings) = self.pattern_test(&arm.pattern, &scrut)?;
+            let arm_body = self.emit_expr(&arm.body)?;
+            let _ = write!(
+                body,
+                "{keyword} ({cond}) {{ {bindings}{res} = {arm_body}; }} "
+            );
+        }
+        let _ = write!(body, "else {{ w_trap(\"no matching arm\"); }} {res};");
+
+        Ok(format!("({{ {body} }})"))
+    }
+
+    /// The C test for a top-level pattern against `scrut`, plus any C binding
+    /// statements it introduces. A wildcard or a plain identifier matches
+    /// anything; a variant (or a nullary-constructor identifier) tests the tag.
+    fn pattern_test(
+        &self,
+        pattern: &Pattern,
+        scrut: &str,
+    ) -> Result<(String, String), CodegenError> {
+        match pattern {
+            Pattern::Wildcard { .. } => Ok(("1".to_string(), String::new())),
+            Pattern::Ident { name, span } => {
+                if self.ctors.get(name).copied() == Some(0) {
+                    // A nullary constructor, e.g. `None`.
+                    Ok((format!("w_is({scrut}, \"{name}\")"), String::new()))
+                } else if self.ctors.contains_key(name) {
+                    Err(CodegenError::new(
+                        *span,
+                        format!("constructor `{name}` used without its arguments in a pattern"),
+                    ))
+                } else {
+                    // A binding matches anything and names the whole value.
+                    Ok((
+                        "1".to_string(),
+                        format!("WValue {} = {scrut}; ", local(name)),
+                    ))
+                }
+            }
+            Pattern::Variant { name, args, span } => {
+                let mut bindings = String::new();
+                for (i, sub) in args.iter().enumerate() {
+                    match sub {
+                        Pattern::Wildcard { .. } => {}
+                        Pattern::Ident { name: n, .. } if !self.ctors.contains_key(n) => {
+                            let _ =
+                                write!(bindings, "WValue {} = {scrut}.fields[{i}]; ", local(n));
+                        }
+                        _ => {
+                            return Err(CodegenError::new(
+                                sub.span(),
+                                "nested sub-patterns in a `match` arm are not supported by the C back end yet",
+                            ))
+                        }
+                    }
+                }
+                let _ = span;
+                Ok((format!("w_is({scrut}, \"{name}\")"), bindings))
+            }
+        }
+    }
 }
 
 /// A function prototype's `name(WValue p0, ...)` fragment (without return type).
@@ -168,179 +501,27 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+/// Escape a Writ text value for a C string literal.
+fn c_escape(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\{:03o}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn indent(level: usize, out: &mut String) {
     for _ in 0..level {
         out.push_str("    ");
     }
-}
-
-fn emit_block(block: &Block, level: usize, out: &mut String) -> Result<(), CodegenError> {
-    for stmt in &block.stmts {
-        emit_stmt(stmt, level, out)?;
-    }
-    Ok(())
-}
-
-fn emit_stmt(stmt: &Stmt, level: usize, out: &mut String) -> Result<(), CodegenError> {
-    match stmt {
-        Stmt::Let { name, value, .. } => {
-            indent(level, out);
-            let _ = writeln!(out, "WValue {} = {};", local(name), emit_expr(value)?);
-        }
-        Stmt::Expr(e) => {
-            indent(level, out);
-            let _ = writeln!(out, "{};", emit_expr(e)?);
-        }
-        Stmt::Return { value, .. } => {
-            indent(level, out);
-            match value {
-                Some(e) => {
-                    let _ = writeln!(out, "return {};", emit_expr(e)?);
-                }
-                None => out.push_str("return w_unit();\n"),
-            }
-        }
-        Stmt::If {
-            cond,
-            then_block,
-            else_block,
-            ..
-        } => {
-            indent(level, out);
-            let _ = writeln!(out, "if (w_as_bool({})) {{", emit_expr(cond)?);
-            emit_block(then_block, level + 1, out)?;
-            indent(level, out);
-            out.push('}');
-            if let Some(else_block) = else_block {
-                out.push_str(" else {\n");
-                emit_block(else_block, level + 1, out)?;
-                indent(level, out);
-                out.push('}');
-            }
-            out.push('\n');
-        }
-        // A lowered contract check. Trapping reproduces the interpreter's exact
-        // message, so runtime failures read identically across back ends.
-        Stmt::Check {
-            predicate, blame, ..
-        } => {
-            let msg = match blame {
-                Blame::Caller => "precondition violated (blame: caller)",
-                Blame::Implementation => "postcondition violated (blame: implementation)",
-            };
-            indent(level, out);
-            let _ = writeln!(
-                out,
-                "if (!w_as_bool({})) w_trap(\"{}\");",
-                emit_expr(predicate)?,
-                msg
-            );
-        }
-    }
-    Ok(())
-}
-
-fn emit_expr(expr: &Expr) -> Result<String, CodegenError> {
-    match expr {
-        Expr::Literal(lit) => match &lit.kind {
-            LiteralKind::Int(n) => Ok(format!("w_int({n})")),
-            LiteralKind::Bool(b) => Ok(format!("w_bool({})", i32::from(*b))),
-            LiteralKind::Text(_) => Err(CodegenError::new(
-                lit.span,
-                "text literals are not supported by the C back end yet",
-            )),
-        },
-        Expr::Identifier { name, span } => {
-            // Constructors (nullary variants) are sum-type values — not yet
-            // supported. A plain variable maps to its local C name.
-            if name.chars().next().is_some_and(char::is_uppercase) {
-                return Err(CodegenError::new(
-                    *span,
-                    format!("sum-type constructor `{name}` is not supported by the C back end yet"),
-                ));
-            }
-            Ok(local(name))
-        }
-        Expr::Unary { op, operand, .. } => {
-            let inner = emit_expr(operand)?;
-            Ok(match op {
-                UnaryOp::Neg => format!("w_neg({inner})"),
-                UnaryOp::Not => format!("w_not({inner})"),
-            })
-        }
-        Expr::Binary {
-            op, left, right, ..
-        } => {
-            let l = emit_expr(left)?;
-            let r = emit_expr(right)?;
-            Ok(match op {
-                // Short-circuit operators emit C `&&` / `||` so a side-effecting
-                // right operand is skipped exactly as the interpreter skips it.
-                BinaryOp::And => format!("w_bool(w_as_bool({l}) && w_as_bool({r}))"),
-                BinaryOp::Or => format!("w_bool(w_as_bool({l}) || w_as_bool({r}))"),
-                BinaryOp::Add => format!("w_add({l}, {r})"),
-                BinaryOp::Sub => format!("w_sub({l}, {r})"),
-                BinaryOp::Mul => format!("w_mul({l}, {r})"),
-                BinaryOp::Div => format!("w_div({l}, {r})"),
-                BinaryOp::Rem => format!("w_rem({l}, {r})"),
-                BinaryOp::Lt => format!("w_lt({l}, {r})"),
-                BinaryOp::Le => format!("w_le({l}, {r})"),
-                BinaryOp::Gt => format!("w_gt({l}, {r})"),
-                BinaryOp::Ge => format!("w_ge({l}, {r})"),
-                BinaryOp::Eq => format!("w_eq({l}, {r})"),
-                BinaryOp::Ne => format!("w_ne({l}, {r})"),
-            })
-        }
-        Expr::Call {
-            callee, args, span, ..
-        } => emit_call(callee, args, *span),
-        Expr::Match { span, .. } => Err(CodegenError::new(
-            *span,
-            "`match` is not supported by the C back end yet",
-        )),
-        Expr::Member { span, .. } => Err(CodegenError::new(
-            *span,
-            "member access is not supported by the C back end yet",
-        )),
-    }
-}
-
-fn emit_call(callee: &Expr, args: &[Expr], span: Span) -> Result<String, CodegenError> {
-    let Expr::Identifier { name, .. } = callee else {
-        return Err(CodegenError::new(
-            span,
-            "only named functions can be called in the C back end yet",
-        ));
-    };
-    let emitted: Result<Vec<String>, _> = args.iter().map(emit_expr).collect();
-    let emitted = emitted?;
-
-    // Built-ins. `print` writes a line; `sanitize` is a runtime identity (taint
-    // is a compile-time property with no runtime representation).
-    if name == "print" {
-        let arg = emitted
-            .first()
-            .ok_or_else(|| CodegenError::new(span, "`print` expects 1 argument"))?;
-        return Ok(format!("w_print({arg})"));
-    }
-    if name == "sanitize" {
-        let arg = emitted
-            .first()
-            .ok_or_else(|| CodegenError::new(span, "`sanitize` expects 1 argument"))?;
-        return Ok(format!("({arg})"));
-    }
-    if name == "grant" {
-        return Err(CodegenError::new(
-            span,
-            "capability narrowing (`grant`) is not supported by the C back end yet",
-        ));
-    }
-    // A constructor call starts with an uppercase name — a sum-type value.
-    if name.chars().next().is_some_and(char::is_uppercase) {
-        return Err(CodegenError::new(
-            span,
-            format!("sum-type constructor `{name}` is not supported by the C back end yet"),
-        ));
-    }
-    Ok(format!("{}({})", cname(name), emitted.join(", ")))
 }
