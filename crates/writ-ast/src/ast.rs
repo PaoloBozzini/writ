@@ -79,10 +79,17 @@ pub enum Expr {
         right: Box<Expr>,
         span: Span,
     },
-    /// A function call, e.g. `f(a, b)`.
+    /// A function call, e.g. `f(a, b)`. Sum-type constructors reuse this form:
+    /// `Some(x)` is a call, `None` is an `Identifier`.
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,
+        span: Span,
+    },
+    /// A `match` expression over a scrutinee.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
         span: Span,
     },
 }
@@ -96,7 +103,48 @@ impl Expr {
             Expr::Identifier { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
-            | Expr::Call { span, .. } => *span,
+            | Expr::Call { span, .. }
+            | Expr::Match { span, .. } => *span,
+        }
+    }
+}
+
+/// One arm of a `match`: a pattern and the expression it evaluates to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// A match pattern.
+///
+/// The parser does not know which names are sum-type variants, so a bare
+/// identifier is left as [`Pattern::Ident`] — a later pass classifies it as a
+/// nullary-variant pattern or a binding. A `Name(subpatterns)` form is
+/// unambiguously a [`Pattern::Variant`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pattern {
+    /// `_` — matches anything, binds nothing.
+    Wildcard { span: Span },
+    /// A bare identifier: a binding, or a nullary variant (resolved later).
+    Ident { name: String, span: Span },
+    /// A variant pattern with sub-patterns, e.g. `Some(x)` or `Pair(a, b)`.
+    Variant {
+        name: String,
+        args: Vec<Pattern>,
+        span: Span,
+    },
+}
+
+impl Pattern {
+    /// The source span covering this pattern.
+    #[must_use]
+    pub fn span(&self) -> Span {
+        match self {
+            Pattern::Wildcard { span }
+            | Pattern::Ident { span, .. }
+            | Pattern::Variant { span, .. } => *span,
         }
     }
 }
@@ -207,11 +255,33 @@ pub struct Function {
     pub span: Span,
 }
 
+/// One variant of a sum type, e.g. `Some(T)` or `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    pub name: String,
+    /// Positional payload types, e.g. `[T]` for `Some(T)`; empty for a nullary
+    /// variant like `None`.
+    pub fields: Vec<TypeExpr>,
+    pub span: Span,
+}
+
+/// A sum-type declaration, e.g. `type Option<T> = Some(T) | None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDecl {
+    pub name: String,
+    /// Generic type parameters, e.g. `["T"]` for `Option<T>`.
+    pub generics: Vec<String>,
+    pub variants: Vec<Variant>,
+    pub span: Span,
+}
+
 /// A top-level item in a source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     /// A function declaration.
     Function(Function),
+    /// A sum-type declaration.
+    Type(TypeDecl),
 }
 
 /// A whole parsed source file: an ordered list of top-level items.

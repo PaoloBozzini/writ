@@ -86,7 +86,11 @@ impl<'m> Interpreter<'m> {
     pub fn new(module: &'m Module) -> Result<Self, RuntimeError> {
         let mut funcs = HashMap::new();
         for item in &module.items {
-            let writ_ast::Item::Function(f) = item;
+            // Type declarations carry no runtime behaviour of their own; their
+            // constructors and `match` are handled where values are evaluated.
+            let writ_ast::Item::Function(f) = item else {
+                continue;
+            };
             if funcs.insert(f.signature.name.as_str(), f).is_some() {
                 return Err(RuntimeError::new(
                     f.signature.span,
@@ -282,6 +286,10 @@ impl<'m> Interpreter<'m> {
                 }
                 self.call_by_name(name, values, *span)
             }
+            Expr::Match { span, .. } => Err(RuntimeError::new(
+                *span,
+                "`match` is not evaluated by the interpreter yet",
+            )),
         }
     }
 
@@ -450,7 +458,9 @@ mod tests {
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let writ_ast::Item::Function(f) = &result.module.items[0];
+        let writ_ast::Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         eval_block(&f.body)
     }
 

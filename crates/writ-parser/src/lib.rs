@@ -16,7 +16,7 @@ use writ_ast::{
     BinaryOp, Block, Expr, Function, Item, Literal, LiteralKind, Module, Param, Signature, Span,
     Stmt, TypeExpr, UnaryOp,
 };
-use writ_ast::{Contract, Diagnostic, Effect, EffectSet};
+use writ_ast::{Contract, Diagnostic, Effect, EffectSet, MatchArm, Pattern, TypeDecl, Variant};
 use writ_lexer::{Keyword, Token, TokenKind};
 
 /// The result of parsing a source string: the (possibly partial) module and any
@@ -171,7 +171,10 @@ impl<'a> Parser<'a> {
         if !self.at_end() {
             self.advance();
         }
-        while !self.at_end() && self.peek() != &TokenKind::Keyword(Keyword::Fn) {
+        while !self.at_end()
+            && self.peek() != &TokenKind::Keyword(Keyword::Fn)
+            && self.peek() != &TokenKind::Keyword(Keyword::Type)
+        {
             self.advance();
         }
     }
@@ -179,7 +182,87 @@ impl<'a> Parser<'a> {
     fn parse_item(&mut self) -> Result<Item, Diagnostic> {
         match self.peek() {
             TokenKind::Keyword(Keyword::Fn) => self.parse_function().map(Item::Function),
-            _ => Err(self.error_here("P0002", "expected an item (a `fn` declaration)")),
+            TokenKind::Keyword(Keyword::Type) => self.parse_type_decl().map(Item::Type),
+            _ => Err(self.error_here("P0002", "expected an item (a `fn` or `type` declaration)")),
+        }
+    }
+
+    /// Parse `type Name<T, U> = Variant(Type, ...) | Variant | ...`.
+    fn parse_type_decl(&mut self) -> Result<TypeDecl, Diagnostic> {
+        let start = self.advance().span; // `type`
+        let name = self.expect_ident("a type name")?;
+        let generics = self.parse_generics()?;
+        self.expect(&TokenKind::Eq, "`=` in the type declaration")?;
+        let mut variants = vec![self.parse_variant()?];
+        loop {
+            if self.eat_pipe() {
+                variants.push(self.parse_variant()?);
+            } else if self.peek() == &TokenKind::PipePipe {
+                // A common mistake: `||` where a `|` variant separator belongs.
+                return Err(self.error_here("P0004", "use `|` (not `||`) to separate variants"));
+            } else {
+                break;
+            }
+        }
+        let last_span = variants.last().map_or(start, |v| v.span);
+        Ok(TypeDecl {
+            name,
+            generics,
+            variants,
+            span: start.merge(&last_span),
+        })
+    }
+
+    /// Parse an optional `<T, U, ...>` generic parameter list.
+    fn parse_generics(&mut self) -> Result<Vec<String>, Diagnostic> {
+        let mut generics = Vec::new();
+        if self.peek() == &TokenKind::Lt {
+            self.advance();
+            loop {
+                generics.push(self.expect_ident("a generic parameter name")?);
+                match self.peek() {
+                    TokenKind::Comma => {
+                        self.advance();
+                    }
+                    _ => break,
+                }
+            }
+            self.expect(&TokenKind::Gt, "`>` to close the generic parameters")?;
+        }
+        Ok(generics)
+    }
+
+    fn parse_variant(&mut self) -> Result<Variant, Diagnostic> {
+        let (name, start) = self.expect_ident_spanned("a variant name")?;
+        let mut fields = Vec::new();
+        let mut end = start;
+        if self.peek() == &TokenKind::LParen {
+            self.advance();
+            while self.peek() != &TokenKind::RParen {
+                fields.push(self.parse_type()?);
+                if self.peek() == &TokenKind::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            end = self.expect(&TokenKind::RParen, "`)` to close the variant payload")?;
+        }
+        Ok(Variant {
+            name,
+            fields,
+            span: start.merge(&end),
+        })
+    }
+
+    /// Consume a single `|` separator. The lexer only has `||`, so a variant
+    /// separator is spelled `|`; here we accept it via a dedicated token check.
+    fn eat_pipe(&mut self) -> bool {
+        if self.peek() == &TokenKind::Pipe {
+            self.advance();
+            true
+        } else {
+            false
         }
     }
 
@@ -529,10 +612,77 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen, "`)` to close the group")?;
                 Ok(inner)
             }
+            TokenKind::Keyword(Keyword::Match) => self.parse_match(),
             other => Err(self.error_here(
                 "P0002",
                 format!("expected an expression, found {}", describe(&other)),
             )),
+        }
+    }
+
+    /// Parse `match <scrutinee> { <pattern> => <expr>, ... }`.
+    fn parse_match(&mut self) -> Result<Expr, Diagnostic> {
+        let start = self.advance().span; // `match`
+        let scrutinee = self.expression()?;
+        self.expect(&TokenKind::LBrace, "`{` to open the match arms")?;
+        let mut arms = Vec::new();
+        while self.peek() != &TokenKind::RBrace && !self.at_end() {
+            arms.push(self.parse_match_arm()?);
+            if self.peek() == &TokenKind::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let end = self.expect(&TokenKind::RBrace, "`}` to close the match arms")?;
+        Ok(Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+            span: start.merge(&end),
+        })
+    }
+
+    fn parse_match_arm(&mut self) -> Result<MatchArm, Diagnostic> {
+        let pattern = self.parse_pattern()?;
+        self.expect(&TokenKind::FatArrow, "`=>` after the pattern")?;
+        let body = self.expression()?;
+        let span = pattern.span().merge(&body.span());
+        Ok(MatchArm {
+            pattern,
+            body,
+            span,
+        })
+    }
+
+    /// Parse a pattern: `_`, a bare identifier, or `Name(subpatterns)`.
+    fn parse_pattern(&mut self) -> Result<Pattern, Diagnostic> {
+        // `_` lexes as an identifier; treat it as the wildcard.
+        if let TokenKind::Ident(name) = self.peek() {
+            if name == "_" {
+                let span = self.advance().span;
+                return Ok(Pattern::Wildcard { span });
+            }
+        }
+        let (name, start) = self.expect_ident_spanned("a pattern")?;
+        if self.peek() == &TokenKind::LParen {
+            self.advance();
+            let mut args = Vec::new();
+            while self.peek() != &TokenKind::RParen {
+                args.push(self.parse_pattern()?);
+                if self.peek() == &TokenKind::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            let end = self.expect(&TokenKind::RParen, "`)` to close the variant pattern")?;
+            Ok(Pattern::Variant {
+                name,
+                args,
+                span: start.merge(&end),
+            })
+        } else {
+            Ok(Pattern::Ident { name, span: start })
         }
     }
 
@@ -583,8 +733,10 @@ fn symbol(kind: &TokenKind) -> &'static str {
         TokenKind::Eq => "=",
         TokenKind::Bang => "!",
         TokenKind::AmpAmp => "&&",
+        TokenKind::Pipe => "|",
         TokenKind::PipePipe => "||",
         TokenKind::Arrow => "->",
+        TokenKind::FatArrow => "=>",
         TokenKind::LParen => "(",
         TokenKind::RParen => ")",
         TokenKind::LBrace => "{",
@@ -684,7 +836,9 @@ fn add(a: Int, b: Int) -> Int {
             result.diagnostics
         );
         assert_eq!(result.module.items.len(), 1);
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         assert_eq!(f.signature.name, "add");
         assert_eq!(f.signature.params.len(), 2);
         assert_eq!(f.signature.params[0].ty.name, "Int");
@@ -706,7 +860,9 @@ fn add(a: Int, b: Int) -> Int {
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         let ty = &f.signature.params[0].ty;
         assert_eq!(ty.name, "Cap");
         assert_eq!(ty.args.len(), 1);
@@ -730,7 +886,9 @@ fn write_line(out: Cap<Write>, msg: Text) -> Int
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         let sig = &f.signature;
         assert_eq!(sig.effects.effects.len(), 1);
         assert_eq!(sig.effects.effects[0].name, "Write");
@@ -769,7 +927,9 @@ fn f(a: Int)
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         assert_eq!(f.signature.effects.effects.len(), 2);
         assert_eq!(f.signature.requires.len(), 2);
         assert_eq!(f.signature.ensures.len(), 2);
@@ -783,7 +943,9 @@ fn f(a: Int)
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         assert!(f.signature.effects.effects.is_empty());
         assert!(f.signature.effects.span.is_some());
     }
@@ -834,7 +996,9 @@ fn f(a: Int)
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         match &f.body.stmts[0] {
             Stmt::If { else_block, .. } => assert!(else_block.is_some()),
             other => panic!("expected an if statement, got {other:?}"),
@@ -849,7 +1013,9 @@ fn f(a: Int)
             "diagnostics: {:?}",
             result.diagnostics
         );
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         match &f.body.stmts[0] {
             Stmt::If {
                 else_block: Some(b),
@@ -862,6 +1028,89 @@ fn f(a: Int)
             }
             other => panic!("expected an if with an else-if, got {other:?}"),
         }
+    }
+
+    // --- Sum types, match, patterns (#65) ----------------------------------
+
+    #[test]
+    fn parses_generic_sum_type_declaration() {
+        let result = parse("type Option<T> = Some(T) | None");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Type(decl) = &result.module.items[0] else {
+            panic!("expected a type decl")
+        };
+        assert_eq!(decl.name, "Option");
+        assert_eq!(decl.generics, vec!["T".to_string()]);
+        assert_eq!(decl.variants.len(), 2);
+        assert_eq!(decl.variants[0].name, "Some");
+        assert_eq!(decl.variants[0].fields.len(), 1);
+        assert_eq!(decl.variants[0].fields[0].name, "T");
+        assert_eq!(decl.variants[1].name, "None");
+        assert!(decl.variants[1].fields.is_empty());
+    }
+
+    #[test]
+    fn parses_multi_param_generics() {
+        let result = parse("type Result<T, E> = Ok(T) | Err(E)");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Type(decl) = &result.module.items[0] else {
+            panic!("expected a type decl")
+        };
+        assert_eq!(decl.generics, vec!["T".to_string(), "E".to_string()]);
+    }
+
+    #[test]
+    fn parses_match_with_variant_and_wildcard_patterns() {
+        let src =
+            "fn f(o: Option<Int>) -> Int { return match o { Some(x) => x, None => 0, _ => 1 }; }";
+        let result = parse(src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(func) = &result.module.items[0] else {
+            panic!("fn")
+        };
+        let Stmt::Return {
+            value: Some(Expr::Match { arms, .. }),
+            ..
+        } = &func.body.stmts[0]
+        else {
+            panic!("expected a returned match")
+        };
+        assert_eq!(arms.len(), 3);
+        match &arms[0].pattern {
+            Pattern::Variant { name, args, .. } => {
+                assert_eq!(name, "Some");
+                assert!(matches!(args[0], Pattern::Ident { .. }));
+            }
+            other => panic!("expected Some(x), got {other:?}"),
+        }
+        assert!(matches!(arms[1].pattern, Pattern::Ident { .. })); // None (bare)
+        assert!(matches!(arms[2].pattern, Pattern::Wildcard { .. }));
+    }
+
+    #[test]
+    fn empty_variant_payload_and_declaration_errors() {
+        // A `type` with no variant body is refused.
+        let result = parse("type Bad =");
+        assert!(!result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn double_pipe_between_variants_is_refused() {
+        let result = parse("type T = A || B");
+        assert!(!result.diagnostics.is_empty());
+        assert_eq!(result.diagnostics[0].code, "P0004");
     }
 
     // --- Error recovery: parsing continues past the first error.
@@ -886,7 +1135,9 @@ fn f(a: Int)
         let result = parse("fn 1() {}\nfn good() { return; }\n");
         assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(result.module.items.len(), 1);
-        let Item::Function(f) = &result.module.items[0];
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("expected a function")
+        };
         assert_eq!(f.signature.name, "good");
     }
 

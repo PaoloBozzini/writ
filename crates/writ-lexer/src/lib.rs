@@ -123,6 +123,8 @@ impl<'a> Lexer<'a> {
             '=' => {
                 if self.eat('=') {
                     self.push(TokenKind::EqEq, start, one + 1);
+                } else if self.eat('>') {
+                    self.push(TokenKind::FatArrow, start, one + 1);
                 } else {
                     self.push(TokenKind::Eq, start, one);
                 }
@@ -149,7 +151,13 @@ impl<'a> Lexer<'a> {
                 }
             }
             '&' if self.eat('&') => self.push(TokenKind::AmpAmp, start, one + 1),
-            '|' if self.eat('|') => self.push(TokenKind::PipePipe, start, one + 1),
+            '|' => {
+                if self.eat('|') {
+                    self.push(TokenKind::PipePipe, start, one + 1);
+                } else {
+                    self.push(TokenKind::Pipe, start, one);
+                }
+            }
             '"' => self.scan_text(start),
             c if c.is_ascii_digit() => self.scan_number(start, one),
             c if c.is_ascii_alphabetic() || c == '_' => self.scan_ident(start, one),
