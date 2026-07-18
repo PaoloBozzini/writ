@@ -102,3 +102,40 @@ fn f() { io(\"x\"); }
 ";
     assert_eq!(codes(src), codes(src));
 }
+
+// --- Contract predicates must be pure (#97) -------------------------------
+
+#[test]
+fn an_effectful_call_in_a_requires_predicate_is_refused() {
+    // `noisy` declares `Write`; calling it inside `requires` would perform an
+    // undeclared effect at runtime. It must be refused.
+    let cs = codes(
+        "\
+fn noisy(out: Cap<Write>) -> Bool uses { Write } { return true; }
+fn f(out: Cap<Write>, n: Int) -> Int requires noisy(out) { return n; }
+",
+    );
+    assert_eq!(cs, vec!["E0102"], "effectful requires predicate");
+}
+
+#[test]
+fn an_effectful_call_in_an_ensures_predicate_is_refused() {
+    let cs = codes(
+        "\
+fn noisy(out: Cap<Write>) -> Bool uses { Write } { return true; }
+fn f(out: Cap<Write>, n: Int) -> Int ensures noisy(out) { return n; }
+",
+    );
+    assert_eq!(cs, vec!["E0102"], "effectful ensures predicate");
+}
+
+#[test]
+fn a_pure_call_in_a_predicate_is_allowed() {
+    // A predicate may call a pure (effect-free) function.
+    assert_ok(
+        "\
+fn is_positive(n: Int) -> Bool { return n > 0; }
+fn f(n: Int) -> Int requires is_positive(n) ensures is_positive(result) { return n; }
+",
+    );
+}
