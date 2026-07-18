@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use writ_ast::{BinaryOp, Block, Expr, Item, Module, Signature, Stmt, UnaryOp};
+use writ_ast::{BinaryOp, Block, Expr, Item, Module, Signature, Stmt, TypeExpr, UnaryOp};
 use writ_ast::{Diagnostic, Span};
 
 use crate::ty::Type;
@@ -71,10 +71,78 @@ fn cap_authority(ty: &Type) -> Option<&str> {
     }
 }
 
-/// A sum-type constructor: the type it belongs to and its field arity.
-struct CtorInfo {
+/// A sum-type constructor: the type it belongs to, that type's generic
+/// parameters, and its payload field types (syntactic, referencing the
+/// generics).
+struct CtorInfo<'m> {
     owner: String,
-    arity: usize,
+    /// The owner type's generic parameters, e.g. `["T"]` for `Option<T>`.
+    generics: Vec<String>,
+    /// The variant's positional payload types; its length is the arity.
+    fields: &'m [TypeExpr],
+}
+
+/// Resolve a variant field's syntactic type, replacing any generic parameter
+/// with its inferred substitution (or [`Type::Infer`] when nothing fixed it).
+fn resolve_field(texpr: &TypeExpr, generics: &[String], subst: &HashMap<String, Type>) -> Type {
+    if texpr.args.is_empty() && generics.iter().any(|g| g == &texpr.name) {
+        return subst.get(&texpr.name).cloned().unwrap_or(Type::Infer);
+    }
+    match texpr.name.as_str() {
+        "Int" => Type::Int,
+        "Bool" => Type::Bool,
+        "Text" => Type::Text,
+        "Unit" => Type::Unit,
+        _ => Type::Named {
+            name: texpr.name.clone(),
+            args: texpr
+                .args
+                .iter()
+                .map(|a| resolve_field(a, generics, subst))
+                .collect(),
+        },
+    }
+}
+
+/// Infer generic bindings by structurally matching a field's declared type
+/// against the actual argument type, recording the first binding for each
+/// generic. Later payload checks report any inconsistency.
+fn unify(field: &TypeExpr, arg: &Type, generics: &[String], subst: &mut HashMap<String, Type>) {
+    if field.args.is_empty() && generics.iter().any(|g| g == &field.name) {
+        subst
+            .entry(field.name.clone())
+            .or_insert_with(|| arg.clone());
+        return;
+    }
+    if let Type::Named { name, args } = arg {
+        if *name == field.name && args.len() == field.args.len() {
+            for (f, a) in field.args.iter().zip(args) {
+                unify(f, a, generics, subst);
+            }
+        }
+    }
+}
+
+/// Instantiate a variant's field types against a scrutinee's type arguments,
+/// so a pattern binds each payload variable at its precise type.
+fn instantiate_fields(
+    owner: &str,
+    generics: &[String],
+    fields: &[TypeExpr],
+    scrutinee_ty: &Type,
+) -> Vec<Type> {
+    let mut subst = HashMap::new();
+    if let Type::Named { name, args } = scrutinee_ty {
+        if name == owner && args.len() == generics.len() {
+            for (g, a) in generics.iter().zip(args) {
+                subst.insert(g.clone(), a.clone());
+            }
+        }
+    }
+    fields
+        .iter()
+        .map(|f| resolve_field(f, generics, &subst))
+        .collect()
 }
 
 struct Checker<'m> {
@@ -82,7 +150,7 @@ struct Checker<'m> {
     /// Sum type name → its variant names, in declaration order.
     sum_variants: HashMap<&'m str, Vec<&'m str>>,
     /// Variant name → its constructor info.
-    ctors: HashMap<&'m str, CtorInfo>,
+    ctors: HashMap<&'m str, CtorInfo<'m>>,
     diagnostics: Vec<Diagnostic>,
     /// The declared return type of the function currently being checked.
     current_ret: Type,
@@ -111,7 +179,8 @@ impl<'m> Checker<'m> {
                             .entry(variant.name.as_str())
                             .or_insert_with(|| CtorInfo {
                                 owner: decl.name.clone(),
-                                arity: variant.fields.len(),
+                                generics: decl.generics.clone(),
+                                fields: &variant.fields,
                             });
                     }
                 }
@@ -261,12 +330,14 @@ impl<'m> Checker<'m> {
             Expr::Identifier { name, span } => {
                 if let Some(ty) = self.lookup(name) {
                     ty
-                } else if let Some((owner, arity)) = self
+                } else if let Some((owner, ngen, arity)) = self
                     .ctors
                     .get(name.as_str())
-                    .map(|c| (c.owner.clone(), c.arity))
+                    .map(|c| (c.owner.clone(), c.generics.len(), c.fields.len()))
                 {
-                    // A bare nullary constructor, e.g. `None`.
+                    // A bare nullary constructor, e.g. `None`. Any generic
+                    // parameter is left undetermined, so `None` fits any
+                    // `Option<_>`.
                     if arity != 0 {
                         self.error(
                             "T0004",
@@ -276,7 +347,7 @@ impl<'m> Checker<'m> {
                     }
                     Type::Named {
                         name: owner,
-                        args: Vec::new(),
+                        args: vec![Type::Infer; ngen],
                     }
                 } else {
                     self.error("T0002", *span, format!("unknown variable `{name}`"));
@@ -341,7 +412,12 @@ impl<'m> Checker<'m> {
 
         for arm in arms {
             self.scopes.push(HashMap::new());
-            self.collect_pattern(&arm.pattern, &mut covered, &mut has_catch_all);
+            self.collect_pattern(
+                &arm.pattern,
+                &scrutinee_ty,
+                &mut covered,
+                &mut has_catch_all,
+            );
             let body_ty = self.check_expr(&arm.body);
             self.scopes.pop();
 
@@ -391,10 +467,12 @@ impl<'m> Checker<'m> {
     }
 
     /// Record which variants an arm's pattern covers, binding any pattern
-    /// variables. A wildcard or a non-constructor identifier is a catch-all.
+    /// variables at their instantiated type. A wildcard or a non-constructor
+    /// identifier is a catch-all.
     fn collect_pattern(
         &mut self,
         pattern: &writ_ast::Pattern,
+        scrutinee_ty: &Type,
         covered: &mut HashSet<&'m str>,
         has_catch_all: &mut bool,
     ) {
@@ -403,44 +481,65 @@ impl<'m> Checker<'m> {
             Pattern::Wildcard { .. } => *has_catch_all = true,
             Pattern::Ident { name, .. } => {
                 // A name that is a known nullary variant covers that variant;
-                // otherwise it is a binding that matches anything.
+                // otherwise it is a binding that matches the whole scrutinee.
                 if let Some((variant, _)) = self.ctors.get_key_value(name.as_str()) {
                     covered.insert(*variant);
                 } else {
                     *has_catch_all = true;
-                    self.bind(name.clone(), Type::Error);
+                    self.bind(name.clone(), scrutinee_ty.clone());
                 }
             }
             Pattern::Variant { name, args, .. } => {
-                if let Some((variant, info)) = self.ctors.get_key_value(name.as_str()) {
-                    covered.insert(*variant);
-                    if args.len() != info.arity {
-                        // Arity is validated leniently; payload types are checked
-                        // once generic instantiation lands (follow-up).
+                let looked = self
+                    .ctors
+                    .get_key_value(name.as_str())
+                    .map(|(v, c)| (*v, c.owner.clone(), c.generics.clone(), c.fields));
+                if let Some((variant, owner, generics, fields)) = looked {
+                    covered.insert(variant);
+                    let field_types = instantiate_fields(&owner, &generics, fields, scrutinee_ty);
+                    self.bind_subpatterns(args, &field_types);
+                } else {
+                    // Unknown constructor: bind sub-pattern variables opaquely.
+                    for sub in args {
+                        self.bind_pattern(sub, &Type::Error);
                     }
-                }
-                // Bind sub-pattern variables opaquely so the arm body type-checks
-                // without a full generic-instantiation model.
-                for sub in args {
-                    self.bind_pattern_vars(sub);
                 }
             }
         }
     }
 
-    /// Bind every variable a (sub-)pattern introduces, typed opaquely.
-    fn bind_pattern_vars(&mut self, pattern: &writ_ast::Pattern) {
+    /// Bind each sub-pattern to its field type; any sub-pattern beyond the known
+    /// field arity (an arity mismatch) is bound opaquely.
+    fn bind_subpatterns(&mut self, args: &[writ_ast::Pattern], field_types: &[Type]) {
+        for (i, sub) in args.iter().enumerate() {
+            let ty = field_types.get(i).cloned().unwrap_or(Type::Error);
+            self.bind_pattern(sub, &ty);
+        }
+    }
+
+    /// Bind every variable a (sub-)pattern introduces at its expected type,
+    /// destructuring nested variant patterns against that type.
+    fn bind_pattern(&mut self, pattern: &writ_ast::Pattern, expected: &Type) {
         use writ_ast::Pattern;
         match pattern {
             Pattern::Wildcard { .. } => {}
             Pattern::Ident { name, .. } => {
                 if !self.ctors.contains_key(name.as_str()) {
-                    self.bind(name.clone(), Type::Error);
+                    self.bind(name.clone(), expected.clone());
                 }
             }
-            Pattern::Variant { args, .. } => {
-                for sub in args {
-                    self.bind_pattern_vars(sub);
+            Pattern::Variant { name, args, .. } => {
+                let looked = self
+                    .ctors
+                    .get(name.as_str())
+                    .map(|c| (c.owner.clone(), c.generics.clone(), c.fields));
+                if let Some((owner, generics, fields)) = looked {
+                    let field_types = instantiate_fields(&owner, &generics, fields, expected);
+                    self.bind_subpatterns(args, &field_types);
+                } else {
+                    for sub in args {
+                        self.bind_pattern(sub, &Type::Error);
+                    }
                 }
             }
         }
@@ -573,11 +672,12 @@ impl<'m> Checker<'m> {
         }
 
         // A constructor call, e.g. `Some(x)`, builds a value of its sum type.
-        if let Some((owner, arity)) = self
+        if let Some((owner, generics, fields)) = self
             .ctors
             .get(name.as_str())
-            .map(|c| (c.owner.clone(), c.arity))
+            .map(|c| (c.owner.clone(), c.generics.clone(), c.fields))
         {
+            let arity = fields.len();
             if arg_types.len() != arity {
                 self.error(
                     "T0004",
@@ -588,10 +688,32 @@ impl<'m> Checker<'m> {
                     ),
                 );
             }
-            // Payload types are left unchecked pending generic instantiation.
+            // Infer the generic substitution from the supplied arguments, then
+            // check each payload against its instantiated field type.
+            let mut subst = HashMap::new();
+            for (field, arg_ty) in fields.iter().zip(&arg_types) {
+                unify(field, arg_ty, &generics, &mut subst);
+            }
+            for (i, (field, arg_ty)) in fields.iter().zip(&arg_types).enumerate() {
+                let expected = resolve_field(field, &generics, &subst);
+                if !expected.compatible(arg_ty) {
+                    self.error(
+                        "T0001",
+                        args[i].span(),
+                        format!(
+                            "constructor `{name}` argument {}: expected `{expected}`, found `{arg_ty}`",
+                            i + 1
+                        ),
+                    );
+                }
+            }
+            let type_args = generics
+                .iter()
+                .map(|g| subst.get(g).cloned().unwrap_or(Type::Infer))
+                .collect();
             return Type::Named {
                 name: owner,
-                args: Vec::new(),
+                args: type_args,
             };
         }
 
