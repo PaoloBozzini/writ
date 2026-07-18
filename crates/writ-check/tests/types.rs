@@ -127,6 +127,35 @@ fn unknown_function_is_reported() {
     assert_eq!(cs, vec!["T0003"]);
 }
 
+// --- Contract predicate type-checking (#25) -------------------------------
+
+#[test]
+fn well_typed_contracts_check() {
+    assert_ok(
+        "\
+fn half(n: Int) -> Int
+    requires n > 0
+    ensures result >= 0
+{
+    return n / 2;
+}
+",
+    );
+}
+
+#[test]
+fn non_bool_requires_is_rejected() {
+    let cs = codes("fn f(n: Int) -> Int requires n + 1 { return n; }");
+    assert_eq!(cs, vec!["T0007"]);
+}
+
+#[test]
+fn ensures_referencing_unknown_name_is_rejected() {
+    // `result` is in scope for `ensures`, but `bogus` is not.
+    let cs = codes("fn f(n: Int) -> Int ensures bogus > 0 { return n; }");
+    assert_eq!(cs, vec!["T0002"]);
+}
+
 // --- Sum types + exhaustiveness (#17) -------------------------------------
 
 #[test]
