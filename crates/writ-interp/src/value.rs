@@ -69,6 +69,8 @@ impl fmt::Display for Value {
 /// one of these instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeError {
+    /// Stable code, matching the shared diagnostic schema.
+    pub code: String,
     pub message: String,
     pub span: Span,
     /// For a contract violation, which side is at fault. `None` for ordinary
@@ -77,30 +79,15 @@ pub struct RuntimeError {
     pub blame: Option<Blame>,
 }
 
-/// Which side a failed contract blames.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Blame {
-    /// A failed **precondition**: the caller passed bad input.
-    Caller,
-    /// A failed **postcondition**: the implementation returned a wrong answer.
-    Implementation,
-}
-
-impl Blame {
-    /// The stable wire word for this blame direction.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Blame::Caller => "caller",
-            Blame::Implementation => "implementation",
-        }
-    }
-}
+/// Which side a failed contract blames. Re-exported from `writ-ast` so runtime
+/// and static diagnostics share one type.
+pub use writ_ast::Blame;
 
 impl RuntimeError {
     #[must_use]
     pub fn new(span: Span, message: impl Into<String>) -> Self {
         Self {
+            code: "E1000".to_string(),
             message: message.into(),
             span,
             blame: None,
@@ -111,6 +98,7 @@ impl RuntimeError {
     #[must_use]
     pub fn precondition(span: Span) -> Self {
         Self {
+            code: "C0001".to_string(),
             message: "precondition violated (blame: caller)".to_string(),
             span,
             blame: Some(Blame::Caller),
@@ -121,9 +109,21 @@ impl RuntimeError {
     #[must_use]
     pub fn postcondition(span: Span) -> Self {
         Self {
+            code: "C0002".to_string(),
             message: "postcondition violated (blame: implementation)".to_string(),
             span,
             blame: Some(Blame::Implementation),
+        }
+    }
+
+    /// Convert to the shared [`writ_ast::Diagnostic`] so runtime errors serialize
+    /// under the one machine-readable schema.
+    #[must_use]
+    pub fn to_diagnostic(&self) -> writ_ast::Diagnostic {
+        let d = writ_ast::Diagnostic::error(self.code.clone(), self.span, self.message.clone());
+        match self.blame {
+            Some(b) => d.with_blame(b),
+            None => d,
         }
     }
 }

@@ -18,6 +18,6 @@ pub use ast::{
     LiteralKind, MatchArm, Module, Param, Pattern, Signature, Stmt, TypeDecl, TypeExpr, UnaryOp,
     Variant,
 };
-pub use diagnostic::{diagnostics_to_json, Diagnostic, Severity};
+pub use diagnostic::{diagnostics_to_json, Blame, Diagnostic, Severity};
 pub use id::NodeId;
 pub use span::Span;
