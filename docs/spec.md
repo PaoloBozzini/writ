@@ -1,8 +1,9 @@
 # The Writ Language Specification
 
-> **Status:** skeleton. This is a *living document* — sections are filled in as
-> the corresponding milestones land. Every feature is framed in terms of Writ's
-> two orthogonal pillars.
+> **Status:** a *living document* — it tracks what the implementation actually
+> does, and grows as the language does. Every feature is framed in terms of Writ's
+> two orthogonal pillars. For a practical, example-driven introduction, see
+> [getting-started.md](getting-started.md).
 
 Writ is a general-purpose language whose primary author is an LLM. Its design is
 governed by one prime directive:
@@ -25,38 +26,187 @@ the answer is right) and never speak about authority.
 
 ## 1. Syntax
 
-*Stub.* The concrete grammar of Writ: lexical structure (tokens, literals,
-identifiers, keywords), expressions and operator precedence, statements, and the
-declaration forms.
+Writ's grammar is small and regular. Signatures are the load-bearing surface of
+the language — they declare a function's effects via `uses {...}` and its
+contracts via `requires` / `ensures` — so those clauses are first-class grammar,
+not annotations.
 
-Signatures are the load-bearing surface of the language — they declare a
-function's effects via `uses {...}` and its contracts via `requires` / `ensures`
-— so the grammar gives those clauses first-class syntax rather than treating
-them as annotations.
+### Lexical structure
 
-*To be specified:* lexical grammar, expression grammar with precedence, statement
-forms, function and signature syntax.
+- **Comments** are line comments: `//` to the end of the line. There are no block
+  comments.
+- **Whitespace** separates tokens and is otherwise insignificant.
+- **Identifiers** begin with a letter or `_` and continue with letters, digits,
+  or `_`.
+- **Keywords** (reserved): `fn`, `let`, `mut`, `return`, `if`, `else`, `match`,
+  `type`, `import`, `export`, `uses`, `requires`, `ensures`, `true`, `false`.
+- **Literals**:
+  - *integer* — a run of decimal digits, within the range of a signed 64-bit
+    integer;
+  - *text* — `"..."`, with the escapes `\"`, `\\`, `\n`, `\t` decoded;
+  - *boolean* — `true` or `false`.
+- **Operators**: `+ - * / %`, `== != < <= > >=`, `&& || !`, `=`, and the arrows
+  `->` (return type) and `=>` (match arm). `|` separates sum-type variants.
+- **Punctuation**: `( ) { }`, `,`, `:`, `;`, `.`.
+
+The lexer never aborts on malformed input: a bad character or literal produces a
+diagnostic and the scan recovers, so one bad byte does not hide later errors.
+
+### Expressions
+
+Binary operators are left-associative, with these precedence levels from lowest
+to highest binding:
+
+1. `||`
+2. `&&`
+3. `==`, `!=`
+4. `<`, `<=`, `>`, `>=`
+5. `+`, `-`
+6. `*`, `/`, `%`
+
+Unary `-` (negation) and `!` (logical not) are prefix and bind tighter than any
+binary operator; parentheses group. The primary expressions are literals and
+identifiers; a **call** `f(a, b, ...)`, optionally with type arguments
+`f<T>(...)` (used by `grant`); **member access** `a.b` (an imported module's
+item, e.g. `math.add`); a **`match`**; and a parenthesized expression.
+
+A `match` scrutinizes a value against **patterns**:
+
+```
+match o {
+    Some(x) => x,
+    None    => 0,
+    _       => -1,
+}
+```
+
+Each arm's body is an expression, and all arms must agree on a type. A pattern is
+`_` (wildcard), an identifier (a binding, or a nullary-variant name), or a
+variant `Name(p, ...)` with nested sub-patterns. A `match` on a sum type must be
+**exhaustive** (see §2).
+
+### Statements
+
+A block `{ ... }` is a sequence of statements:
+
+- **binding** — `let name = e;` or `let name: T = e;` (immutable);
+- **expression** — `e;` (evaluated for its value or effect, e.g. a `print` call);
+- **return** — `return e;` or `return;`;
+- **conditional** — `if cond { ... }`, with optional `else if` / `else`; the
+  condition must be `Bool`.
+
+### Declarations
+
+A source file (a **module**) begins with zero or more `import` declarations,
+followed by function and type declarations.
+
+- **Import** — `import name` brings the sibling module `name` into scope.
+- **Type** — `[export] type Name[<G, ...>] = V | V | ...` declares a sum type
+  with optional generic parameters. Each variant is a name, optionally with
+  positional payload types: `Some(T)`, `Pair(Int, Int)`, or a nullary `None`.
+- **Function** — `[export] fn name(params) [-> T] [clauses] { body }`, where a
+  parameter is `name: Type`. The **signature clauses** — `uses { E, ... }`,
+  `requires <expr>`, and `ensures <expr>` — sit between the return type and the
+  body, **in any order**, and `requires` / `ensures` may each appear more than
+  once.
+
+`export` makes a top-level item visible to modules that import it; without it the
+item is private to its module.
 
 ---
 
 ## 2. Type system
 
-*Stub.* Writ is strongly and statically typed with **no implicit coercion** and
-**non-null by default**. The goal is to turn "plausible but wrong" into "doesn't
-compile."
+Writ is **strongly and statically typed**, with **no implicit coercion** and **no
+null value**. Every expression has exactly one type, known at compile time; a
+value is never silently widened, narrowed, or nil. The goal is to turn "plausible
+but wrong" into "does not compile."
 
-Effects live in the type system: a signature tells you what a function can do.
-Sum types with **exhaustive `match`** ensure every case is handled.
+### Types
 
-**Text is a sequence of Unicode scalar values.** The text built-ins index by
-code point, not byte: `text_len(s)` counts scalar values, `char_at(s, i)`
+The **ground types** are:
+
+- `Int` — a signed 64-bit integer. Arithmetic is **checked**: overflow and
+  division by zero are errors, never wraparound.
+- `Bool` — `true` or `false`.
+- `Text` — a sequence of Unicode scalar values (below).
+- `Unit` — the type of a statement, and of a function with no return type; it has
+  a single value.
+
+A **type expression** is a name with optional type arguments — `Int`,
+`Option<Int>`, `Cap<Write>`, `Tainted<Text>`. The head names a ground type, a
+declared sum type, or a built-in constructor: `Cap<E>` (a capability for authority
+`E`, §3) or `Tainted<T>` (untrusted data, §3). A name with no built-in rule is
+kept opaque so a later pass can give it meaning.
+
+There are **no implicit conversions**: `Int` and `Bool` never interconvert, and
+combining or comparing mismatched types is a compile error, not a coercion.
+
+### Sum types and exhaustiveness
+
+A sum type enumerates named variants, each optionally carrying positional payload
+values, and may be generic:
+
+```
+type Option<T> = Some(T) | None
+```
+
+Payload types are **instantiated** at each use: `Some(3)` is `Option<Int>` and
+`Some("x")` is `Option<Text>`, so those two are distinct and incompatible. In a
+`match`, a variant pattern binds its payload at the instantiated type — `Some(x)`
+on an `Option<Int>` binds `x: Int` — and a pattern from a *different* sum type is
+refused.
+
+A `match` on a sum type must be **exhaustive**: every variant is covered, or a
+wildcard `_` / catch-all binding is present. A missing case is a compile error
+that names the uncovered variants — exhaustiveness is a compile-time guarantee,
+not a runtime check. A binding may not repeat within one pattern (`Pair(x, x)` is
+rejected).
+
+### Text
+
+`Text` is a sequence of **Unicode scalar values**, so the text built-ins are
+character-based, not byte-based: `text_len` counts scalar values, `char_at(s, i)`
 returns the i-th one as a one-character `Text`, `substring(s, start, end)` slices
-the half-open char range, and `concat(a, b)` joins. Out-of-range `char_at` /
-`substring` is a runtime error. Both back ends implement identical char-based
-semantics (the C back end carries a small UTF-8 decoder).
+the half-open character range, `concat` joins, and `char_code` / `code_char`
+convert between a character and its scalar value. Out-of-range `char_at` /
+`substring` / `char_code` is a runtime error. The interpreter and the native back
+end implement identical semantics (the C back end carries a small UTF-8 decoder).
 
-*To be specified:* primitive and compound types, sum types and exhaustiveness,
-the effect rows carried by signatures, and the absence of implicit conversions.
+### Functions and signatures
+
+A signature gives each parameter a type and, if the function returns a value, a
+return type. A call is checked for arity and for each argument's type, and its
+result takes the return type. `main` may take only capability parameters — it is
+where authority enters a program (§3). A signature also carries the **effect** and
+**contract** clauses the two pillars act on: effects live in the type system, so a
+signature tells you what a function may *do*, not just what it computes.
+
+### Built-in functions
+
+A small set of built-ins is always in scope (each shadowable by a user function
+of the same name). The pure ones take no capability:
+
+- `print(x)` — write one line; accepts any type, returns `Unit`.
+- `concat(Text, Text) -> Text`, `text_len(Text) -> Int`,
+  `char_at(Text, Int) -> Text`, `substring(Text, Int, Int) -> Text`,
+  `char_code(Text) -> Int`, `code_char(Int) -> Text`.
+- `sanitize(Tainted<T>) -> T` — the taint boundary (§3).
+- `grant<A>(Cap<..>) -> Cap<A>` — capability narrowing (§3).
+
+The effectful built-ins take a capability and declare an effect:
+
+- `read_file(Cap<Read>, Text) -> Text` — `uses { Read }`.
+- `write_file(Cap<Write>, Text, Text)` — `uses { Write }`.
+
+### Diagnostics
+
+Type errors use stable `T00xx` codes, each with an exact span — for example
+`T0001` (type mismatch), `T0004` (wrong argument count), `T0005` (return type
+mismatch), `T0006` (non-exhaustive match, naming the missing variants), `T0010` /
+`T0011` (duplicate function / variant name), and `T0012` (a pattern from the wrong
+sum type). Output is deterministic: the same source yields the same diagnostics in
+the same order.
 
 ---
 
