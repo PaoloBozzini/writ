@@ -132,6 +132,12 @@ narrowing (`grant`), the authority check at effect sites, and taint tracking.
 - **Blame direction is load-bearing:** a failed precondition blames the
   **caller**; a failed postcondition blames the **implementation**. Diagnostics
   preserve this direction because a generate-check-repair loop relies on it.
+- **Predicates are pure.** A `requires` / `ensures` predicate may not call an
+  effectful function (one with a non-empty `uses {...}`). Contracts *assert*
+  correctness; they must not *do* anything. Because the interpreter evaluates
+  predicates at runtime, an effectful predicate would perform an effect the
+  signature never declared — so it is a compile error (`E0102`). A predicate may
+  freely call pure (effect-free) functions.
 
 *To be specified:* the contract expression language, runtime checking with
 blame, and the optional SMT-backed static verification pass.

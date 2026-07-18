@@ -54,10 +54,38 @@ pub fn check_effects(module: &Module) -> Vec<Diagnostic> {
             .map(|e| e.name.as_str())
             .collect();
 
+        let fn_name = f.signature.name.as_str();
+
+        // Contract predicates must be **pure**: the interpreter evaluates
+        // `requires` / `ensures` at runtime, so an effectful call inside one is
+        // an effect the signature never declares. Rather than treat predicates
+        // as effect sites, the language forbids effects in them outright —
+        // contracts assert correctness, they must not *do* anything.
+        let mut predicate_calls = Vec::new();
+        for clause in f.signature.requires.iter().chain(&f.signature.ensures) {
+            collect_calls_in_expr(&clause.predicate, &mut predicate_calls);
+        }
+        for call in &predicate_calls {
+            let Expr::Call { callee, span, .. } = call else {
+                continue;
+            };
+            let Expr::Identifier { name, .. } = callee.as_ref() else {
+                continue;
+            };
+            if declared.get(name.as_str()).is_some_and(|e| !e.is_empty()) {
+                diagnostics.push(Diagnostic::error(
+                    "E0102",
+                    *span,
+                    format!(
+                        "contract predicate of `{fn_name}` must be pure, but it calls effectful function `{name}`"
+                    ),
+                ));
+            }
+        }
+
         let mut calls = Vec::new();
         collect_calls_in_block(&f.body, &mut calls);
 
-        let fn_name = f.signature.name.as_str();
         for call in calls {
             let Expr::Call { callee, span, .. } = call else {
                 continue;
