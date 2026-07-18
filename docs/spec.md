@@ -84,6 +84,13 @@ It may **not**:
 - be **stored** in a data structure, or
 - be **captured** by a closure.
 
+This is enforced **structurally**, on the *value's capability-hood*, not on
+surface syntax: wrapping a capability in a compound expression (a `match`, say)
+does not launder it, and the result of `grant<A>(cap)` is itself a capability, so
+**binding it to a local is refused** (`E0202`) — narrow and forward it inline, in
+argument position (`write(grant<Write>(root), ..)`). The invariant "no local ever
+holds a capability" then holds by construction.
+
 This is the simplest provably-sound option, and today it is the *only* sound one:
 the language has no closures, structs, or collections, so return position is the
 sole escape channel that exists. Forbidding it keeps the invariant **"a function

@@ -27,6 +27,10 @@ use writ_ast::{Block, Diagnostic, Expr, Item, Module, Stmt, TypeExpr};
 /// The type-head that marks a capability type, e.g. `Cap<Write>`.
 const CAP: &str = "Cap";
 
+/// The capability-narrowing built-in `grant<A>(cap) -> Cap<A>` — the one call
+/// that yields a capability value.
+const GRANT: &str = "grant";
+
 /// Whether a syntactic type is a capability type.
 fn is_cap(ty: &TypeExpr) -> bool {
     ty.name == CAP
@@ -88,7 +92,7 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
             // originate from a parameter and this rule forbids re-binding one,
             // no local ever holds a capability.
             let annotated_cap = ty.as_ref().is_some_and(is_cap);
-            let binds_cap = is_capability_ref(value, cap_params);
+            let binds_cap = is_capability_expr(value, cap_params);
             if annotated_cap || binds_cap {
                 out.push(Diagnostic::error(
                     "E0202",
@@ -103,7 +107,7 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
             value: Some(expr),
             span,
         } => {
-            if is_capability_ref(expr, cap_params) {
+            if is_capability_expr(expr, cap_params) {
                 out.push(Diagnostic::error(
                     "E0201",
                     *span,
@@ -127,8 +131,18 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
     }
 }
 
-/// Whether `expr` directly names a capability parameter (the only expression
-/// that can have capability type — capabilities are otherwise unconstructible).
-fn is_capability_ref(expr: &Expr, cap_params: &HashSet<&str>) -> bool {
-    matches!(expr, Expr::Identifier { name, .. } if cap_params.contains(name.as_str()))
+/// Whether `expr` evaluates to a capability, checked **structurally** so a
+/// compound expression cannot launder one. A capability value arises only from a
+/// capability parameter or a `grant<A>(..)` call; a `match` yields one if any arm
+/// it could pick does. (Second-class rules mean no user function can return a
+/// capability, so an ordinary call is never capability-typed.)
+fn is_capability_expr(expr: &Expr, cap_params: &HashSet<&str>) -> bool {
+    match expr {
+        Expr::Identifier { name, .. } => cap_params.contains(name.as_str()),
+        Expr::Call { callee, .. } => {
+            matches!(callee.as_ref(), Expr::Identifier { name, .. } if name == GRANT)
+        }
+        Expr::Match { arms, .. } => arms.iter().any(|a| is_capability_expr(&a.body, cap_params)),
+        _ => false,
+    }
 }

@@ -77,3 +77,40 @@ fn a_capability_cannot_be_constructed_from_a_value() {
     let cs = type_codes("fn f() { let c: Cap<Write> = 0; }");
     assert_eq!(cs, vec!["T0001"]);
 }
+
+// --- Structural escape check (#99) ----------------------------------------
+
+#[test]
+fn a_match_wrapper_cannot_stash_a_capability() {
+    // Wrapping a capability in a `match` must not defeat E0202.
+    let cs = cap_codes("fn f(out: Cap<Write>) { let stashed = match true { _ => out }; }");
+    assert_eq!(cs, vec!["E0202"], "match must not launder a capability");
+}
+
+#[test]
+fn a_grant_result_cannot_be_bound_to_a_local() {
+    // A capability from `grant` is still a capability; binding it is E0202.
+    let cs = cap_codes("fn f(root: Cap<Root>) { let w = grant<Write>(root); }");
+    assert_eq!(cs, vec!["E0202"], "grant result cannot be stashed");
+}
+
+#[test]
+fn returning_a_capability_via_a_match_is_refused() {
+    let cs = cap_codes("fn f(out: Cap<Write>) -> Cap<Write> { return match true { _ => out }; }");
+    // The return type is a capability (E0201 at the signature) and the returned
+    // expression is a laundered capability (E0201 at the return).
+    assert!(cs.iter().all(|c| c == "E0201"), "{cs:?}");
+    assert!(cs.contains(&"E0201".to_string()));
+}
+
+#[test]
+fn forwarding_a_capability_inline_is_still_allowed() {
+    // The intended usage: narrow and forward in argument position, no local.
+    assert!(cap_codes(
+        "\
+fn write_line(out: Cap<Write>, msg: Text) uses { Write } { return; }
+fn f(root: Cap<Root>) uses { Write } { write_line(grant<Write>(root), \"hi\"); }
+"
+    )
+    .is_empty());
+}
