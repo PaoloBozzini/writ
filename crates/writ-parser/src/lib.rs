@@ -546,11 +546,27 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Primary expressions followed by any number of call suffixes.
+    /// Primary expressions followed by any number of call suffixes, each
+    /// optionally carrying explicit type arguments (`f<A>(x)`).
     fn postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.primary()?;
-        while self.peek() == &TokenKind::LParen {
-            self.advance(); // `(`
+        loop {
+            // Optional `<Types>` immediately before a call's `(`. Disambiguated
+            // from the `<` comparison operator by backtracking: it is only a
+            // type-argument list if it closes with `>` immediately followed by
+            // `(`.
+            let type_args = if self.peek() == &TokenKind::Lt {
+                match self.try_call_type_args() {
+                    Some(args) => args,
+                    None => break, // `<` is a comparison operator; leave it.
+                }
+            } else if self.peek() == &TokenKind::LParen {
+                Vec::new()
+            } else {
+                break;
+            };
+
+            self.expect(&TokenKind::LParen, "`(` to open the call arguments")?;
             let mut args = Vec::new();
             while self.peek() != &TokenKind::RParen {
                 args.push(self.expression()?);
@@ -564,11 +580,48 @@ impl<'a> Parser<'a> {
             let span = expr.span().merge(&end);
             expr = Expr::Call {
                 callee: Box::new(expr),
+                type_args,
                 args,
                 span,
             };
         }
         Ok(expr)
+    }
+
+    /// Try to parse `<Type, ...>` that is immediately followed by `(` — a
+    /// call's type-argument list. Returns `None` (restoring position) if it does
+    /// not fit that shape, so a plain `<` can be handled as a comparison.
+    fn try_call_type_args(&mut self) -> Option<Vec<TypeExpr>> {
+        let saved = self.pos;
+        self.advance(); // trial-consume `<`
+        let mut type_args = Vec::new();
+        loop {
+            match self.parse_type() {
+                Ok(ty) => type_args.push(ty),
+                Err(_) => {
+                    self.pos = saved;
+                    return None;
+                }
+            }
+            match self.peek() {
+                TokenKind::Comma => {
+                    self.advance();
+                }
+                TokenKind::Gt => break,
+                _ => {
+                    self.pos = saved;
+                    return None;
+                }
+            }
+        }
+        self.advance(); // `>`
+                        // It is a type-argument list only if a call follows.
+        if self.peek() == &TokenKind::LParen {
+            Some(type_args)
+        } else {
+            self.pos = saved;
+            None
+        }
     }
 
     fn primary(&mut self) -> Result<Expr, Diagnostic> {

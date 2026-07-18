@@ -80,9 +80,12 @@ pub enum Expr {
         span: Span,
     },
     /// A function call, e.g. `f(a, b)`. Sum-type constructors reuse this form:
-    /// `Some(x)` is a call, `None` is an `Identifier`.
+    /// `Some(x)` is a call, `None` is an `Identifier`. `type_args` carries
+    /// explicit type arguments, e.g. `Write` in `grant<Write>(root)`; it is empty
+    /// for an ordinary call.
     Call {
         callee: Box<Expr>,
+        type_args: Vec<TypeExpr>,
         args: Vec<Expr>,
         span: Span,
     },

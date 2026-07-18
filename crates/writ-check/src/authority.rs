@@ -23,6 +23,9 @@ use writ_ast::{Block, Diagnostic, Expr, Item, Module, Stmt, TypeExpr};
 /// The type-head marking a capability type, e.g. `Cap<Write>`.
 const CAP: &str = "Cap";
 
+/// The authority of the root capability — holds every effect.
+const ROOT: &str = "Root";
+
 /// The authority a `Cap<E>` parameter grants: the inner effect name `E`.
 fn granted_effect(ty: &TypeExpr) -> Option<&str> {
     if ty.name == CAP {
@@ -67,6 +70,12 @@ pub fn check_authority(module: &Module) -> Vec<Diagnostic> {
             .iter()
             .filter_map(|p| granted_effect(&p.ty))
             .collect();
+        // The root capability holds every authority: `main` receives it and
+        // narrows it downward via `grant`, so a holder is authorized for any
+        // effect site.
+        if held.contains(ROOT) {
+            continue;
+        }
         let fn_name = f.signature.name.as_str();
 
         let mut calls = Vec::new();
