@@ -1,0 +1,80 @@
+// A singly-linked list — the first Writ standard-library data structure,
+// written in Writ itself. It demonstrates that the language can express its own
+// reusable data structures: recursive generic sum types, exhaustive `match`,
+// and recursion, all of which run in the interpreter and compile natively.
+//
+// Operations are first-order (no higher-order functions yet) and specialised to
+// `Int` where an element operation (equality, comparison) is needed; the `List`
+// type itself is generic.
+
+export type List<T> = Nil | Cons(T, List<T>)
+
+// Whether the list has no elements.
+export fn is_empty(xs: List<Int>) -> Bool {
+    return match xs {
+        Nil => true,
+        Cons(h, t) => false,
+    };
+}
+
+// The number of elements.
+export fn len(xs: List<Int>) -> Int {
+    return match xs {
+        Nil => 0,
+        Cons(h, t) => 1 + len(t),
+    };
+}
+
+// Prepend an element, returning the new list.
+export fn push_front(x: Int, xs: List<Int>) -> List<Int> {
+    return Cons(x, xs);
+}
+
+// Concatenate two lists.
+export fn append(xs: List<Int>, ys: List<Int>) -> List<Int> {
+    return match xs {
+        Nil => ys,
+        Cons(h, t) => Cons(h, append(t, ys)),
+    };
+}
+
+// Reverse the list.
+export fn reverse(xs: List<Int>) -> List<Int> {
+    return match xs {
+        Nil => Nil,
+        Cons(h, t) => append(reverse(t), Cons(h, Nil)),
+    };
+}
+
+// The sum of the elements.
+export fn sum(xs: List<Int>) -> Int {
+    return match xs {
+        Nil => 0,
+        Cons(h, t) => h + sum(t),
+    };
+}
+
+// Whether `target` appears in the list. Short-circuits on the first match.
+export fn contains(xs: List<Int>, target: Int) -> Bool {
+    return match xs {
+        Nil => false,
+        Cons(h, t) => (h == target) || contains(t, target),
+    };
+}
+
+// The element at index `i` (0-based), or `fallback` if out of range.
+export fn nth_or(xs: List<Int>, i: Int, fallback: Int) -> Int {
+    return match xs {
+        Nil => fallback,
+        Cons(h, t) => head_or_rest(h, t, i, fallback),
+    };
+}
+
+// Helper for `nth_or`: return the head at index 0, else recurse. (`if` is a
+// statement, so this cannot be inlined into a `match` arm expression.)
+fn head_or_rest(h: Int, t: List<Int>, i: Int, fallback: Int) -> Int {
+    if i <= 0 {
+        return h;
+    }
+    return nth_or(t, i - 1, fallback);
+}
