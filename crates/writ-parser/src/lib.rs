@@ -16,7 +16,9 @@ use writ_ast::{
     BinaryOp, Block, Expr, Function, Item, Literal, LiteralKind, Module, Param, Signature, Span,
     Stmt, TypeExpr, UnaryOp,
 };
-use writ_ast::{Contract, Diagnostic, Effect, EffectSet, MatchArm, Pattern, TypeDecl, Variant};
+use writ_ast::{
+    Contract, Diagnostic, Effect, EffectSet, Import, MatchArm, Pattern, TypeDecl, Variant,
+};
 use writ_lexer::{Keyword, Token, TokenKind};
 
 /// The result of parsing a source string: the (possibly partial) module and any
@@ -148,6 +150,19 @@ impl<'a> Parser<'a> {
     // --- Items -------------------------------------------------------------
 
     fn parse_module(&mut self) -> Module {
+        // Imports come first, at the top of the file.
+        let mut imports = Vec::new();
+        while self.peek() == &TokenKind::Keyword(Keyword::Import) {
+            match self.parse_import() {
+                Ok(import) => imports.push(import),
+                Err(d) => {
+                    self.diagnostics.push(d);
+                    self.synchronize();
+                    break;
+                }
+            }
+        }
+
         let mut items = Vec::new();
         while !self.at_end() {
             match self.parse_item() {
@@ -161,7 +176,17 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Module { items }
+        Module { imports, items }
+    }
+
+    /// Parse `import <name>`.
+    fn parse_import(&mut self) -> Result<Import, Diagnostic> {
+        let start = self.advance().span; // `import`
+        let (name, name_span) = self.expect_ident_spanned("a module name")?;
+        Ok(Import {
+            name,
+            span: start.merge(&name_span),
+        })
     }
 
     /// Skip tokens until the start of the next top-level item (`fn`) or end of
@@ -180,15 +205,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_item(&mut self) -> Result<Item, Diagnostic> {
+        // An optional `export` prefix makes the item visible to importers.
+        let exported = if self.peek() == &TokenKind::Keyword(Keyword::Export) {
+            self.advance();
+            true
+        } else {
+            false
+        };
         match self.peek() {
-            TokenKind::Keyword(Keyword::Fn) => self.parse_function().map(Item::Function),
-            TokenKind::Keyword(Keyword::Type) => self.parse_type_decl().map(Item::Type),
+            TokenKind::Keyword(Keyword::Fn) => self.parse_function(exported).map(Item::Function),
+            TokenKind::Keyword(Keyword::Type) => self.parse_type_decl(exported).map(Item::Type),
             _ => Err(self.error_here("P0002", "expected an item (a `fn` or `type` declaration)")),
         }
     }
 
     /// Parse `type Name<T, U> = Variant(Type, ...) | Variant | ...`.
-    fn parse_type_decl(&mut self) -> Result<TypeDecl, Diagnostic> {
+    fn parse_type_decl(&mut self, exported: bool) -> Result<TypeDecl, Diagnostic> {
         let start = self.advance().span; // `type`
         let name = self.expect_ident("a type name")?;
         let generics = self.parse_generics()?;
@@ -206,6 +238,7 @@ impl<'a> Parser<'a> {
         }
         let last_span = variants.last().map_or(start, |v| v.span);
         Ok(TypeDecl {
+            exported,
             name,
             generics,
             variants,
@@ -266,7 +299,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_function(&mut self) -> Result<Function, Diagnostic> {
+    fn parse_function(&mut self, exported: bool) -> Result<Function, Diagnostic> {
         let start = self.expect(&TokenKind::Keyword(Keyword::Fn), "`fn`")?;
         let name = self.expect_ident("a function name")?;
         self.expect(&TokenKind::LParen, "`(`")?;
@@ -313,6 +346,7 @@ impl<'a> Parser<'a> {
             span: start.merge(&sig_end),
         };
         Ok(Function {
+            exported,
             signature,
             body,
             span,
@@ -551,6 +585,18 @@ impl<'a> Parser<'a> {
     fn postfix(&mut self) -> Result<Expr, Diagnostic> {
         let mut expr = self.primary()?;
         loop {
+            // Member access: `expr.name` (e.g. an imported module's item).
+            if self.peek() == &TokenKind::Dot {
+                self.advance();
+                let (name, name_span) = self.expect_ident_spanned("a member name")?;
+                let span = expr.span().merge(&name_span);
+                expr = Expr::Member {
+                    base: Box::new(expr),
+                    name,
+                    span,
+                };
+                continue;
+            }
             // Optional `<Types>` immediately before a call's `(`. Disambiguated
             // from the `<` comparison operator by backtracking: it is only a
             // type-argument list if it closes with `>` immediately followed by
@@ -797,6 +843,7 @@ fn symbol(kind: &TokenKind) -> &'static str {
         TokenKind::Comma => ",",
         TokenKind::Colon => ":",
         TokenKind::Semicolon => ";",
+        TokenKind::Dot => ".",
         _ => "token",
     }
 }
@@ -1164,6 +1211,85 @@ fn f(a: Int)
         let result = parse("type T = A || B");
         assert!(!result.diagnostics.is_empty());
         assert_eq!(result.diagnostics[0].code, "P0004");
+    }
+
+    // --- Modules: import / export / member access (#82) --------------------
+
+    #[test]
+    fn parses_imports_and_export_visibility() {
+        let src = "\
+import math
+import strings
+export fn public_api() -> Int { return 1; }
+fn private_helper() -> Int { return 0; }
+";
+        let result = parse(src);
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(
+            result
+                .module
+                .imports
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["math", "strings"]
+        );
+        let Item::Function(public) = &result.module.items[0] else {
+            panic!("fn")
+        };
+        let Item::Function(private) = &result.module.items[1] else {
+            panic!("fn")
+        };
+        assert!(public.exported, "public_api should be exported");
+        assert!(!private.exported, "private_helper should not be exported");
+    }
+
+    #[test]
+    fn exported_type_declaration() {
+        let result = parse("export type Color = Red | Blue");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Type(decl) = &result.module.items[0] else {
+            panic!("type")
+        };
+        assert!(decl.exported);
+    }
+
+    #[test]
+    fn parses_member_access_call() {
+        let result = parse("fn main() { math.add(1, 2); }");
+        assert!(
+            result.diagnostics.is_empty(),
+            "diagnostics: {:?}",
+            result.diagnostics
+        );
+        let Item::Function(f) = &result.module.items[0] else {
+            panic!("fn")
+        };
+        let Stmt::Expr(Expr::Call { callee, args, .. }) = &f.body.stmts[0] else {
+            panic!("expected a call statement")
+        };
+        assert_eq!(args.len(), 2);
+        match callee.as_ref() {
+            Expr::Member { base, name, .. } => {
+                assert_eq!(name, "add");
+                assert!(matches!(base.as_ref(), Expr::Identifier { name, .. } if name == "math"));
+            }
+            other => panic!("expected `math.add`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn member_access_without_a_name_is_refused() {
+        let err = parse_expr("math.").unwrap_err();
+        assert_eq!(err[0].code, "P0001");
     }
 
     // --- Error recovery: parsing continues past the first error.

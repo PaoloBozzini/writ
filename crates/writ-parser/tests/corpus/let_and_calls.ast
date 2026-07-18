@@ -1,7 +1,9 @@
 Module {
+    imports: [],
     items: [
         Function(
             Function {
+                exported: false,
                 signature: Signature {
                     name: "main",
                     params: [],

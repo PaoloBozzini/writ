@@ -442,6 +442,10 @@ impl<'m> Interpreter<'m> {
                     format!("no match arm covers the value `{value}`"),
                 ))
             }
+            Expr::Member { span, .. } => Err(RuntimeError::new(
+                *span,
+                "module member access is not resolved yet",
+            )),
         }
     }
 

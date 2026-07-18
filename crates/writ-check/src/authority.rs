@@ -161,6 +161,7 @@ fn collect_calls_in_expr<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
                 collect_calls_in_expr(&arm.body, out);
             }
         }
+        Expr::Member { base, .. } => collect_calls_in_expr(base, out),
         Expr::Literal(_) | Expr::Identifier { .. } => {}
     }
 }

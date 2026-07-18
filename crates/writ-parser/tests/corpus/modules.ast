@@ -1,0 +1,187 @@
+Module {
+    imports: [
+        Import {
+            name: "math",
+            span: Span {
+                start: 0,
+                end: 11,
+            },
+        },
+    ],
+    items: [
+        Function(
+            Function {
+                exported: true,
+                signature: Signature {
+                    name: "double",
+                    params: [
+                        Param {
+                            name: "n",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 33,
+                                    end: 36,
+                                },
+                            },
+                            span: Span {
+                                start: 30,
+                                end: 36,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 41,
+                                end: 44,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 20,
+                        end: 44,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                Call {
+                                    callee: Member {
+                                        base: Identifier {
+                                            name: "math",
+                                            span: Span {
+                                                start: 58,
+                                                end: 62,
+                                            },
+                                        },
+                                        name: "add",
+                                        span: Span {
+                                            start: 58,
+                                            end: 66,
+                                        },
+                                    },
+                                    type_args: [],
+                                    args: [
+                                        Identifier {
+                                            name: "n",
+                                            span: Span {
+                                                start: 67,
+                                                end: 68,
+                                            },
+                                        },
+                                        Identifier {
+                                            name: "n",
+                                            span: Span {
+                                                start: 70,
+                                                end: 71,
+                                            },
+                                        },
+                                    ],
+                                    span: Span {
+                                        start: 58,
+                                        end: 72,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 51,
+                                end: 73,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 45,
+                        end: 75,
+                    },
+                },
+                span: Span {
+                    start: 20,
+                    end: 75,
+                },
+            },
+        ),
+        Function(
+            Function {
+                exported: false,
+                signature: Signature {
+                    name: "secret",
+                    params: [
+                        Param {
+                            name: "n",
+                            ty: TypeExpr {
+                                name: "Int",
+                                args: [],
+                                span: Span {
+                                    start: 90,
+                                    end: 93,
+                                },
+                            },
+                            span: Span {
+                                start: 87,
+                                end: 93,
+                            },
+                        },
+                    ],
+                    return_type: Some(
+                        TypeExpr {
+                            name: "Int",
+                            args: [],
+                            span: Span {
+                                start: 98,
+                                end: 101,
+                            },
+                        },
+                    ),
+                    effects: EffectSet {
+                        effects: [],
+                        span: None,
+                    },
+                    requires: [],
+                    ensures: [],
+                    span: Span {
+                        start: 77,
+                        end: 101,
+                    },
+                },
+                body: Block {
+                    stmts: [
+                        Return {
+                            value: Some(
+                                Identifier {
+                                    name: "n",
+                                    span: Span {
+                                        start: 115,
+                                        end: 116,
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: 108,
+                                end: 117,
+                            },
+                        },
+                    ],
+                    span: Span {
+                        start: 102,
+                        end: 119,
+                    },
+                },
+                span: Span {
+                    start: 77,
+                    end: 119,
+                },
+            },
+        ),
+    ],
+}

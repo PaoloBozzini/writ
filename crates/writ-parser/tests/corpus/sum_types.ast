@@ -1,7 +1,9 @@
 Module {
+    imports: [],
     items: [
         Type(
             TypeDecl {
+                exported: false,
                 name: "Option",
                 generics: [
                     "T",
@@ -41,6 +43,7 @@ Module {
         ),
         Type(
             TypeDecl {
+                exported: false,
                 name: "Result",
                 generics: [
                     "T",
@@ -90,6 +93,7 @@ Module {
         ),
         Function(
             Function {
+                exported: false,
                 signature: Signature {
                     name: "unwrap_or",
                     params: [

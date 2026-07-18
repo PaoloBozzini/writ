@@ -95,6 +95,13 @@ pub enum Expr {
         arms: Vec<MatchArm>,
         span: Span,
     },
+    /// Member access, e.g. `math.add` — a name qualified by another expression
+    /// (typically an imported module).
+    Member {
+        base: Box<Expr>,
+        name: String,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -107,7 +114,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Call { span, .. }
-            | Expr::Match { span, .. } => *span,
+            | Expr::Match { span, .. }
+            | Expr::Member { span, .. } => *span,
         }
     }
 }
@@ -253,6 +261,8 @@ pub struct Signature {
 /// A function declaration: a signature paired with a body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
+    /// Whether the function is `export`ed from its module (visible to importers).
+    pub exported: bool,
     pub signature: Signature,
     pub body: Block,
     pub span: Span,
@@ -271,6 +281,8 @@ pub struct Variant {
 /// A sum-type declaration, e.g. `type Option<T> = Some(T) | None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDecl {
+    /// Whether the type is `export`ed from its module.
+    pub exported: bool,
     pub name: String,
     /// Generic type parameters, e.g. `["T"]` for `Option<T>`.
     pub generics: Vec<String>,
@@ -287,9 +299,17 @@ pub enum Item {
     Type(TypeDecl),
 }
 
-/// A whole parsed source file: an ordered list of top-level items.
+/// An `import <name>` declaration bringing another module into scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub name: String,
+    pub span: Span,
+}
+
+/// A whole parsed source file (a module): its imports and its top-level items.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Module {
+    pub imports: Vec<Import>,
     pub items: Vec<Item>,
 }
 
@@ -431,7 +451,9 @@ mod tests {
     #[test]
     fn module_collects_items() {
         let m = Module {
+            imports: vec![],
             items: vec![Item::Function(Function {
+                exported: false,
                 signature: Signature {
                     name: "main".into(),
                     params: vec![],
