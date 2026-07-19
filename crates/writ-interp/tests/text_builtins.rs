@@ -105,3 +105,11 @@ fn code_char_of_a_non_scalar_is_a_runtime_error() {
     assert!(err(r#"return code_char(55296);"#).contains("scalar"));
     assert!(err(r#"return code_char(-1);"#).contains("scalar"));
 }
+
+#[test]
+fn code_char_of_nul_is_a_runtime_error() {
+    // U+0000 is the one scalar that encodes to a NUL byte; Writ text carries no
+    // NUL (it would diverge from the C back end's NUL-terminated strings), so
+    // both engines trap on it (#146).
+    assert!(err(r#"return code_char(0);"#).contains("NUL"));
+}

@@ -565,6 +565,132 @@ fn sanitize_needs_a_validator_argument() {
     assert_eq!(cs, vec!["T0004"]);
 }
 
+// --- `result` reserved in `ensures` functions (#148) -----------------------
+
+#[test]
+fn binding_result_in_an_ensures_function_is_refused() {
+    // Contract lowering injects `let result = <return expr>`, so a user local
+    // named `result` collides and breaks the function per-engine.
+    let cs = codes(
+        "fn f(n: Int) -> Int ensures result > 0 {\n\
+            let result = n + 1;\n\
+            return result;\n\
+         }",
+    );
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn a_result_parameter_in_an_ensures_function_is_refused() {
+    let cs = codes("fn f(result: Int) -> Int ensures result > 0 { return result; }");
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn binding_result_in_an_if_branch_of_an_ensures_function_is_refused() {
+    let cs = codes(
+        "fn f(n: Int) -> Int ensures result > 0 {\n\
+            if n > 0 { let result = n; return result; }\n\
+            return 1;\n\
+         }",
+    );
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn binding_result_without_an_ensures_clause_is_fine() {
+    // No `ensures`, no injected binding — `result` is an ordinary name.
+    assert_ok("fn f(n: Int) -> Int { let result = n + 1; return result; }");
+}
+
+// --- Equality only on comparable types (#147) ------------------------------
+
+#[test]
+fn comparing_function_values_is_refused() {
+    // interp errors at runtime, native compares pointers and prints `true`.
+    let cs = codes("fn inc(n: Int) -> Int { return n + 1; }\nfn main() { print(inc == inc); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn comparing_capabilities_is_refused() {
+    let cs = codes("fn f(a: Cap<Write>, b: Cap<Write>) { let x = a == b; }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn comparing_unit_values_is_refused() {
+    // `print` returns `Unit`; comparing two of them has no defined semantics.
+    let cs = codes("fn f() { let x = print(1) == print(2); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn not_equal_on_a_function_is_also_refused() {
+    let cs = codes("fn inc(n: Int) -> Int { return n + 1; }\nfn main() { print(inc != inc); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn equality_on_comparable_types_still_checks() {
+    // Int, Bool, Text, and sum types remain comparable.
+    assert_ok(
+        "type Pair = P(Int, Int)\n\
+         fn main() {\n\
+            print(1 == 2); print(true == false); print(\"x\" == \"y\");\n\
+            print(P(1, 2) == P(1, 2)); print(P(1, 2) != P(3, 4));\n\
+         }",
+    );
+}
+
+// --- Missing return (#145): a non-Unit function must return on every path --
+
+#[test]
+fn fall_off_the_end_in_tail_position_is_refused() {
+    // The body's last statement is a bare expression, not a `return`: the
+    // interpreter would flow `42` out while the C back end returns `w_unit()`.
+    let cs = codes("fn f() -> Int { 42; }\nfn main() { print(f()); }");
+    assert_eq!(cs, vec!["T0016"]);
+}
+
+#[test]
+fn fall_off_through_a_missing_else_branch_is_refused() {
+    // The `then` branch returns, but with no `else` the function can fall off.
+    let cs = codes("fn f(b: Bool) -> Int { if b { return 1; } }\nfn main() {}");
+    assert_eq!(cs, vec!["T0016"]);
+}
+
+#[test]
+fn a_tail_match_that_is_not_returned_is_refused() {
+    // A `match` used as a statement discards its value; only `return match ...`
+    // returns. This is the "fall-off in a match arm" shape.
+    let cs = codes(
+        "type Option<T> = Some(T) | None\n\
+         fn f(o: Option<Int>) -> Int { match o { Some(x) => x, None => 0 }; }\n\
+         fn main() {}",
+    );
+    assert_eq!(cs, vec!["T0016"]);
+}
+
+#[test]
+fn returning_on_every_path_is_accepted() {
+    // Both `if` branches return; a `Unit` function needs no return; and a
+    // returned `match` returns on every arm.
+    assert_ok(
+        "type Option<T> = Some(T) | None\n\
+         fn sign(b: Bool) -> Int { if b { return 1; } else { return 0; } }\n\
+         fn noop() { let x = 1; }\n\
+         fn g(o: Option<Int>) -> Int { return match o { Some(x) => x, None => 0 }; }\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn a_unit_function_that_falls_off_is_fine() {
+    // An explicit `-> Unit` (and the defaulted case) may fall off the end.
+    assert_ok("fn f() -> Unit { let x = 1; }\nfn main() {}");
+}
+
 // --- Variant pattern against a non-sum scrutinee (#151) --------------------
 
 #[test]
