@@ -178,3 +178,92 @@ fn a_violated_precondition_traps_in_the_native_binary() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Assert both engines reject `src`: the interpreter returns an error and the
+/// native binary exits non-zero, each mentioning `needle`. Text-invariant traps
+/// (NUL, non-UTF-8) can't live in `CORPUS` — that suite requires exit 0 — so
+/// they are checked here as a matched trap instead of a matched value.
+fn assert_both_trap(tag: &str, src: &str, needle: &str) {
+    let dir = scratch(tag);
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, src).expect("write source");
+
+    let (program, _) = writ_cli::load_program(&src_path);
+    let err = writ_cli::run(&program).expect_err("interpreter should trap");
+    assert!(
+        format!("{err:?}").contains(needle),
+        "interpreter message should mention {needle:?}: {err:?}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(!out.status.success(), "native binary should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(needle),
+        "native stderr should mention {needle:?}: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn code_char_zero_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A (#146): U+0000 is the one scalar that encodes to a NUL byte, so a
+    // NUL-terminated C string could not carry it. Both engines trap identically
+    // rather than diverge (interp `1` vs native `0` on `text_len`).
+    assert_both_trap(
+        "nul_code_char",
+        "fn main() { print(text_len(code_char(0))); }",
+        "NUL (U+0000) is not allowed in text",
+    );
+}
+
+#[test]
+fn read_file_of_non_utf8_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family B (#146): invalid UTF-8 content. The interpreter's `read_to_string`
+    // rejects it; the native `w_read_file` now validates too, so both trap
+    // instead of native silently printing a lenient byte count.
+    let dir = scratch("read_non_utf8");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0xff, 0xfe, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_non_utf8_run", &src, "valid UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_file_containing_a_nul_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A via `read_file`: a NUL byte is valid UTF-8 (U+0000) but violates
+    // the no-NUL text invariant, so both engines reject it rather than diverge
+    // (interp a 5-char string vs native a NUL-truncated one).
+    let dir = scratch("read_nul");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0x00, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_nul_run", &src, "not valid");
+    let _ = std::fs::remove_dir_all(&dir);
+}
