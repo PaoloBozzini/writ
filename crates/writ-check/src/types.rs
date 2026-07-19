@@ -27,7 +27,9 @@ const CAP: &str = "Cap";
 /// The authority of the root capability — narrows to any specific power.
 const ROOT: &str = "Root";
 
-/// The taint-removing built-in: `sanitize(Tainted<T>) -> T`.
+/// The validator-based taint boundary:
+/// `sanitize(Tainted<T>, fn(T) -> Bool) -> Option<T>` — applies the validator
+/// and yields `Some(value)` if it passes, else `None`.
 const SANITIZE: &str = "sanitize";
 
 /// The type-head marking untrusted data.
