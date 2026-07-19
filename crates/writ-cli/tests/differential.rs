@@ -58,6 +58,12 @@ const CORPUS: &[&str] = &[
         print(match sanitize(\"hi\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
         print(match sanitize(\"toolong\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
      }",
+    // Same-scope `let mut` rebinding — a documented interpreter feature the C
+    // back end must compile identically (#149), including reading the old value.
+    "fn main() {\n\
+        let mut n = 5; let n = n * 2; print(n);\n\
+        let n = n - 1; print(n);\n\
+     }",
     // Higher-order functions: pass and call pure function values.
     "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
      fn twice(g: fn(Int) -> Int, x: Int) -> Int { return g(g(x)); }\n\
@@ -173,6 +179,43 @@ fn a_violated_precondition_traps_in_the_native_binary() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("precondition violated (blame: caller)"),
+        "native trap message: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn immutable_rebinding_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Rebinding a non-`mut` local is a runtime error in the interpreter; the
+    // native back end reproduces it as a trap with the same message rather than
+    // failing at the C compiler (#149).
+    let dir = scratch("immut_rebind");
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, "fn main() { let x = 1; let x = 2; print(x); }")
+        .expect("write source");
+
+    let (program, _) = writ_cli::load_program(&src_path);
+    let err = writ_cli::run(&program).expect_err("interpreter should reject the rebind");
+    assert!(
+        format!("{err:?}").contains("immutable"),
+        "interpreter message: {err:?}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build should succeed (it traps at runtime)");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(
+        !out.status.success(),
+        "an immutable rebind must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("immutable"),
         "native trap message: {stderr}"
     );
 
