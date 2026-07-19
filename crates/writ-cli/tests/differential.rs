@@ -149,6 +149,39 @@ fn native_output_matches_interpreter_on_the_corpus() {
 }
 
 #[test]
+fn native_matches_interpreter_on_a_multi_module_program() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // A multi-module native build (the corpus was otherwise single-module). The
+    // names are chosen to exercise the mangling collision from #150: the linked
+    // cross-module `foo.bar` and the local `foo_bar` must stay distinct C
+    // identifiers, so this builds and agrees with the interpreter.
+    let dir = scratch("multimod");
+    std::fs::write(dir.join("foo.writ"), "export fn bar() -> Int { return 1; }")
+        .expect("write module");
+    let root = dir.join("main.writ");
+    std::fs::write(
+        &root,
+        "import foo\n\
+         fn foo_bar() -> Int { return 2; }\n\
+         fn main() { print(foo.bar()); print(foo_bar()); }",
+    )
+    .expect("write root");
+
+    let interp_out = interpret(&root);
+    let native_out = native(&dir, &root);
+    assert_eq!(
+        interp_out, native_out,
+        "multi-module program disagrees between interpreter and native"
+    );
+    assert_eq!(interp_out, vec!["1".to_string(), "2".to_string()]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_violated_precondition_traps_in_the_native_binary() {
     if !have_cc() {
         eprintln!("skipping differential test: no C compiler found");
