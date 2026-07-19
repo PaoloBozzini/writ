@@ -31,6 +31,9 @@ const CORPUS: &[&str] = &[
     // A precondition that is satisfied.
     "fn half(n: Int) -> Int requires n > 0 { return n / 2; }\n\
      fn main() { print(half(8)); }",
+    // `result` is an ordinary name outside `ensures` — both engines agree (#148).
+    "fn f(n: Int) -> Int { let result = n + 1; return result; }\n\
+     fn main() { print(f(41)); }",
     // Sum types, generic constructors, and `match` (payloads, nullary, catch-all).
     "type Option<T> = Some(T) | None\n\
      fn unwrap_or(o: Option<Int>, d: Int) -> Int { return match o { Some(x) => x, None => d }; }\n\
@@ -40,6 +43,9 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Equality on the primitive comparable types (Int, Bool) agrees (#147).
+    "fn main() { print(1 == 1); print(1 == 2); print(1 != 2);\n\
+        print(true == true); print(true == false); print(true != false); }",
     // Text built-ins, including a multi-byte (UTF-8) string.
     "fn main() {\n\
         let s = concat(\"hel\", \"lo\");\n\
@@ -154,6 +160,42 @@ fn native_output_matches_interpreter_on_the_corpus() {
     }
 }
 
+/// The two fall-off-the-end programs from #145 (QA-11). They cannot live in
+/// `CORPUS` — the interpreter would flow the last statement's value out while
+/// the native back end returns `w_unit()`, a silent engine divergence (the
+/// second even yields a wrong *arithmetic* answer with no trap). The fix is a
+/// missing-return **compile error** (`T0016`), so these never reach either
+/// engine. This test locks that in: the differential suite's job here is to
+/// prove the divergence is unreachable, not to reproduce it.
+const REFUSED_DIVERGENCES: &[&str] = &[
+    // interp printed `42`, native printed `()`.
+    "fn f() -> Int { 42; }\n\
+     fn main() { print(f()); }",
+    // interp printed `2`, native printed `1` (untagged `.i` read, no trap).
+    "fn g() -> Unit { }\n\
+     fn f() -> Int { g(); }\n\
+     fn main() { print(f() + 1); }",
+];
+
+#[test]
+fn fall_off_the_end_programs_are_refused_before_they_can_diverge() {
+    for src in REFUSED_DIVERGENCES {
+        let dir = scratch("refused");
+        let src_path = dir.join("main.writ");
+        std::fs::write(&src_path, src).expect("write source");
+
+        let (program, diags) = writ_cli::load_program(&src_path);
+        let mut all = diags;
+        all.extend(writ_cli::check(&program));
+        assert!(
+            all.iter().any(|d| d.code == "T0016"),
+            "a fall-off-the-end program must be a compile error, got: {all:?}\n{src}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn a_violated_precondition_traps_in_the_native_binary() {
     if !have_cc() {
@@ -219,5 +261,94 @@ fn immutable_rebinding_traps_in_both_engines() {
         "native trap message: {stderr}"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assert both engines reject `src`: the interpreter returns an error and the
+/// native binary exits non-zero, each mentioning `needle`. Text-invariant traps
+/// (NUL, non-UTF-8) can't live in `CORPUS` — that suite requires exit 0 — so
+/// they are checked here as a matched trap instead of a matched value.
+fn assert_both_trap(tag: &str, src: &str, needle: &str) {
+    let dir = scratch(tag);
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, src).expect("write source");
+
+    let (program, _) = writ_cli::load_program(&src_path);
+    let err = writ_cli::run(&program).expect_err("interpreter should trap");
+    assert!(
+        format!("{err:?}").contains(needle),
+        "interpreter message should mention {needle:?}: {err:?}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(!out.status.success(), "native binary should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(needle),
+        "native stderr should mention {needle:?}: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn code_char_zero_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A (#146): U+0000 is the one scalar that encodes to a NUL byte, so a
+    // NUL-terminated C string could not carry it. Both engines trap identically
+    // rather than diverge (interp `1` vs native `0` on `text_len`).
+    assert_both_trap(
+        "nul_code_char",
+        "fn main() { print(text_len(code_char(0))); }",
+        "NUL (U+0000) is not allowed in text",
+    );
+}
+
+#[test]
+fn read_file_of_non_utf8_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family B (#146): invalid UTF-8 content. The interpreter's `read_to_string`
+    // rejects it; the native `w_read_file` now validates too, so both trap
+    // instead of native silently printing a lenient byte count.
+    let dir = scratch("read_non_utf8");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0xff, 0xfe, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_non_utf8_run", &src, "valid UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_file_containing_a_nul_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A via `read_file`: a NUL byte is valid UTF-8 (U+0000) but violates
+    // the no-NUL text invariant, so both engines reject it rather than diverge
+    // (interp a 5-char string vs native a NUL-truncated one).
+    let dir = scratch("read_nul");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0x00, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_nul_run", &src, "not valid");
     let _ = std::fs::remove_dir_all(&dir);
 }

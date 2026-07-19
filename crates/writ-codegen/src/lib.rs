@@ -188,6 +188,9 @@ static WValue w_char_code(WValue s) {
 }
 static WValue w_code_char(WValue iv) {
     int64_t c = iv.i;
+    /* Text is valid UTF-8 with no embedded NUL; U+0000 is the only scalar that
+       encodes to a NUL byte, so reject it (matches the interpreter). */
+    if (c == 0) w_trap("code_char: NUL (U+0000) is not allowed in text");
     if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) w_trap("code_char: not a Unicode scalar");
     char *r = malloc(5); int n = 0;
     if (c < 0x80) { r[n++] = (char) c; }
@@ -196,6 +199,37 @@ static WValue w_code_char(WValue iv) {
     else { r[n++] = (char)(0xF0 | (c >> 18)); r[n++] = (char)(0x80 | ((c >> 12) & 0x3F)); r[n++] = (char)(0x80 | ((c >> 6) & 0x3F)); r[n++] = (char)(0x80 | (c & 0x3F)); }
     r[n] = 0;
     return w_text(r);
+}
+
+/* Validate that `n` bytes are well-formed UTF-8 with no embedded NUL — the same
+   text invariant the interpreter enforces via `read_to_string` (plus the NUL
+   rejection). Rejects overlong encodings, surrogates, and out-of-range scalars,
+   so `read_file` cannot import bytes the C text ops would then mis-handle. */
+static int w_utf8_valid(const unsigned char *p, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        unsigned char c = p[i];
+        if (c == 0x00) return 0;              /* embedded NUL is not allowed */
+        if (c < 0x80) { i += 1; continue; }
+        int len; int64_t cp;
+        if ((c >> 5) == 0x6) { len = 2; cp = c & 0x1F; }
+        else if ((c >> 4) == 0xE) { len = 3; cp = c & 0x0F; }
+        else if ((c >> 3) == 0x1E) { len = 4; cp = c & 0x07; }
+        else return 0;                        /* invalid leading byte */
+        if (i + (size_t) len > n) return 0;   /* truncated sequence */
+        for (int k = 1; k < len; k++) {
+            unsigned char cc = p[i + (size_t) k];
+            if ((cc & 0xC0) != 0x80) return 0; /* bad continuation byte */
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (len == 2 && cp < 0x80) return 0;      /* overlong */
+        if (len == 3 && cp < 0x800) return 0;     /* overlong */
+        if (len == 4 && cp < 0x10000) return 0;   /* overlong */
+        if (cp > 0x10FFFF) return 0;              /* out of range */
+        if (cp >= 0xD800 && cp <= 0xDFFF) return 0; /* surrogate */
+        i += (size_t) len;
+    }
+    return 1;
 }
 
 /* File I/O. The capability argument carries no runtime data (its authority was
@@ -212,6 +246,7 @@ static WValue w_read_file(WValue cap, WValue path) {
     size_t got = fread(buf, 1, (size_t) n, f);
     fclose(f);
     buf[got] = 0;
+    if (!w_utf8_valid((const unsigned char *) buf, got)) w_trap("read_file: file is not valid UTF-8 text");
     return w_text(buf);
 }
 static WValue w_write_file(WValue cap, WValue path, WValue contents) {

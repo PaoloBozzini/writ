@@ -114,3 +114,49 @@ fn f(root: Cap<Root>) uses { Write } { write_line(grant<Write>(root), \"hi\"); }
     )
     .is_empty());
 }
+
+// --- #144: sum-type wrapping must not launder a capability -----------------
+
+const OPTION: &str = "type Option<T> = Some(T) | None\n";
+
+#[test]
+fn wrapping_a_capability_in_a_constructor_is_refused() {
+    // `let x = Some(cap)` stashes a capability inside a sum value — E0202.
+    let cs = cap_codes(&format!(
+        "{OPTION}fn f(out: Cap<Write>) {{ let boxed = Some(out); }}"
+    ));
+    assert_eq!(cs, vec!["E0202"], "a constructor cannot stash a capability");
+}
+
+#[test]
+fn returning_a_capability_wrapped_in_a_sum_type_is_refused() {
+    // A return type that *contains* `Cap<..>` structurally is refused (E0201),
+    // as is the returned `Some(out)` value.
+    let cs = cap_codes(&format!(
+        "{OPTION}fn stash(out: Cap<Write>) -> Option<Cap<Write>> {{ return Some(out); }}"
+    ));
+    assert!(cs.iter().all(|c| c == "E0201"), "{cs:?}");
+    assert!(cs.contains(&"E0201".to_string()));
+}
+
+#[test]
+fn wrap_then_unwrap_and_use_is_refused_at_the_stash() {
+    // The full laundering attempt: wrap, then match it back out to use. The
+    // stash itself is refused (E0202), so the capability never escapes.
+    let cs = cap_codes(&format!(
+        "{OPTION}\
+fn write_line(out: Cap<Write>, msg: Text) uses {{ Write }} {{ return; }}
+fn nothing() {{ return; }}
+fn f(out: Cap<Write>) uses {{ Write }} {{
+    let boxed = Some(out);
+    match boxed {{ Some(c) => write_line(c, \"hi\"), None => nothing() }};
+}}"
+    ));
+    assert!(cs.contains(&"E0202".to_string()), "wrap-unwrap-use: {cs:?}");
+}
+
+#[test]
+fn a_non_capability_constructor_is_fine() {
+    // Wrapping ordinary data in a constructor is unaffected.
+    assert!(cap_codes(&format!("{OPTION}fn f(n: Int) {{ let boxed = Some(n); }}")).is_empty());
+}
