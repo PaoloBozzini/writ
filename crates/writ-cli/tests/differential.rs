@@ -151,6 +151,42 @@ fn native_output_matches_interpreter_on_the_corpus() {
     }
 }
 
+/// The two fall-off-the-end programs from #145 (QA-11). They cannot live in
+/// `CORPUS` — the interpreter would flow the last statement's value out while
+/// the native back end returns `w_unit()`, a silent engine divergence (the
+/// second even yields a wrong *arithmetic* answer with no trap). The fix is a
+/// missing-return **compile error** (`T0016`), so these never reach either
+/// engine. This test locks that in: the differential suite's job here is to
+/// prove the divergence is unreachable, not to reproduce it.
+const REFUSED_DIVERGENCES: &[&str] = &[
+    // interp printed `42`, native printed `()`.
+    "fn f() -> Int { 42; }\n\
+     fn main() { print(f()); }",
+    // interp printed `2`, native printed `1` (untagged `.i` read, no trap).
+    "fn g() -> Unit { }\n\
+     fn f() -> Int { g(); }\n\
+     fn main() { print(f() + 1); }",
+];
+
+#[test]
+fn fall_off_the_end_programs_are_refused_before_they_can_diverge() {
+    for src in REFUSED_DIVERGENCES {
+        let dir = scratch("refused");
+        let src_path = dir.join("main.writ");
+        std::fs::write(&src_path, src).expect("write source");
+
+        let (program, diags) = writ_cli::load_program(&src_path);
+        let mut all = diags;
+        all.extend(writ_cli::check(&program));
+        assert!(
+            all.iter().any(|d| d.code == "T0016"),
+            "a fall-off-the-end program must be a compile error, got: {all:?}\n{src}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn a_violated_precondition_traps_in_the_native_binary() {
     if !have_cc() {
