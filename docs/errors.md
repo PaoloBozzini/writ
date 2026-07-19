@@ -47,8 +47,26 @@ are emitted as a JSON array (`writ check` / `writ run` print exactly this).
 | `R####` | module resolver |
 | `T0008`/`T0009` | capability narrowing (`grant`) |
 | `C####` | contract violations (runtime; carry `blame`) |
+| `V####` | SMT verifier (`writ verify`; warnings only) — `V0001` out of the SMT fragment, `V0002` counterexample found, `V0003` solver undecided |
 | `D####` | driver (file loading) |
 | `E1000` | generic runtime error |
 
 Codes are stable: a code identifies one rule for the life of the language, so a
 generate-check-repair loop can branch on it without parsing prose.
+
+## Runtime errors and partial output
+
+A program that fails at runtime behaves identically under `writ run` (the
+interpreter) and a `writ build` native binary:
+
+- **Output goes to stdout; the error goes to stderr.** Both engines print the
+  lines produced *before* the failure to stdout, then emit **one** machine-
+  readable diagnostic to stderr and exit non-zero. Output printed before the
+  failure is **preserved**, not discarded — a repair loop sees how far the
+  program got.
+- **The native diagnostic carries the stable `code`** (and, for a contract
+  failure, the `blame`) as a one-line JSON object, the same load-bearing fields
+  `writ run` emits. Native binaries carry no source spans, so the native line
+  omits `span`; the interpreter's includes it. Ordinary runtime errors use
+  `E1000`; a failed precondition/postcondition uses `C0001`/`C0002` with
+  `blame` `caller`/`implementation` on both engines.

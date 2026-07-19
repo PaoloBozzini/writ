@@ -78,13 +78,28 @@ static WValue w_variant(const char *name, WValue *fields, int64_t n) {
 }
 static int w_as_bool(WValue v) { return v.i != 0; }
 
-static void w_trap(const char *msg) { fprintf(stderr, "%s\n", msg); exit(1); }
+/* A runtime trap emits a one-line JSON object on stderr carrying the stable
+   diagnostic `code` and (for contract failures) the `blame`, so a tool reading
+   native output gets the same machine-readable signal `writ run` provides. The
+   messages are compile-time constants with no `"`/`\\`, so no JSON escaping is
+   needed. Native binaries carry no source spans, so none is emitted. */
+static void w_fail(const char *code, const char *msg) {
+    fprintf(stderr, "{\"code\":\"%s\",\"severity\":\"error\",\"message\":\"%s\"}\n", code, msg);
+    exit(1);
+}
+static void w_fail_blamed(const char *code, const char *msg, const char *blame) {
+    fprintf(stderr, "{\"code\":\"%s\",\"severity\":\"error\",\"message\":\"%s\",\"blame\":\"%s\"}\n", code, msg, blame);
+    exit(1);
+}
+/* An ordinary (non-contract) runtime error: the generic `E1000` code, matching
+   the interpreter's `RuntimeError::new`. */
+static void w_trap(const char *msg) { w_fail("E1000", msg); }
 
 static WValue w_add(WValue a, WValue b) { int64_t r; if (__builtin_add_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_sub(WValue a, WValue b) { int64_t r; if (__builtin_sub_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_mul(WValue a, WValue b) { int64_t r; if (__builtin_mul_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_div(WValue a, WValue b) { if (b.i == 0) w_trap("division by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i / b.i); }
-static WValue w_rem(WValue a, WValue b) { if (b.i == 0) w_trap("division by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i % b.i); }
+static WValue w_rem(WValue a, WValue b) { if (b.i == 0) w_trap("remainder by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i % b.i); }
 static WValue w_neg(WValue a) { int64_t r; if (__builtin_sub_overflow((int64_t)0, a.i, &r)) w_trap("integer overflow negating value"); return w_int(r); }
 static WValue w_not(WValue a) { return w_bool(a.i == 0); }
 static WValue w_lt(WValue a, WValue b) { return w_bool(a.i < b.i); }
@@ -188,6 +203,9 @@ static WValue w_char_code(WValue s) {
 }
 static WValue w_code_char(WValue iv) {
     int64_t c = iv.i;
+    /* Text is valid UTF-8 with no embedded NUL; U+0000 is the only scalar that
+       encodes to a NUL byte, so reject it (matches the interpreter). */
+    if (c == 0) w_trap("code_char: NUL (U+0000) is not allowed in text");
     if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) w_trap("code_char: not a Unicode scalar");
     char *r = malloc(5); int n = 0;
     if (c < 0x80) { r[n++] = (char) c; }
@@ -196,6 +214,37 @@ static WValue w_code_char(WValue iv) {
     else { r[n++] = (char)(0xF0 | (c >> 18)); r[n++] = (char)(0x80 | ((c >> 12) & 0x3F)); r[n++] = (char)(0x80 | ((c >> 6) & 0x3F)); r[n++] = (char)(0x80 | (c & 0x3F)); }
     r[n] = 0;
     return w_text(r);
+}
+
+/* Validate that `n` bytes are well-formed UTF-8 with no embedded NUL — the same
+   text invariant the interpreter enforces via `read_to_string` (plus the NUL
+   rejection). Rejects overlong encodings, surrogates, and out-of-range scalars,
+   so `read_file` cannot import bytes the C text ops would then mis-handle. */
+static int w_utf8_valid(const unsigned char *p, size_t n) {
+    size_t i = 0;
+    while (i < n) {
+        unsigned char c = p[i];
+        if (c == 0x00) return 0;              /* embedded NUL is not allowed */
+        if (c < 0x80) { i += 1; continue; }
+        int len; int64_t cp;
+        if ((c >> 5) == 0x6) { len = 2; cp = c & 0x1F; }
+        else if ((c >> 4) == 0xE) { len = 3; cp = c & 0x0F; }
+        else if ((c >> 3) == 0x1E) { len = 4; cp = c & 0x07; }
+        else return 0;                        /* invalid leading byte */
+        if (i + (size_t) len > n) return 0;   /* truncated sequence */
+        for (int k = 1; k < len; k++) {
+            unsigned char cc = p[i + (size_t) k];
+            if ((cc & 0xC0) != 0x80) return 0; /* bad continuation byte */
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (len == 2 && cp < 0x80) return 0;      /* overlong */
+        if (len == 3 && cp < 0x800) return 0;     /* overlong */
+        if (len == 4 && cp < 0x10000) return 0;   /* overlong */
+        if (cp > 0x10FFFF) return 0;              /* out of range */
+        if (cp >= 0xD800 && cp <= 0xDFFF) return 0; /* surrogate */
+        i += (size_t) len;
+    }
+    return 1;
 }
 
 /* File I/O. The capability argument carries no runtime data (its authority was
@@ -212,6 +261,7 @@ static WValue w_read_file(WValue cap, WValue path) {
     size_t got = fread(buf, 1, (size_t) n, f);
     fclose(f);
     buf[got] = 0;
+    if (!w_utf8_valid((const unsigned char *) buf, got)) w_trap("read_file: file is not valid UTF-8 text");
     return w_text(buf);
 }
 static WValue w_write_file(WValue cap, WValue path, WValue contents) {
@@ -264,6 +314,7 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         fn_names,
         out: String::new(),
         counter: 0,
+        scopes: Vec::new(),
     };
     e.out.push_str(PRELUDE);
     e.out.push('\n');
@@ -333,6 +384,11 @@ struct Emitter {
     out: String,
     /// A monotonic counter for unique temporary names (e.g. per `match`).
     counter: usize,
+    /// Locals declared in each open C block scope (name → was it `let mut`),
+    /// innermost last. Used to compile a same-scope rebind — a documented
+    /// interpreter feature — as a C assignment rather than a second (illegal)
+    /// declaration of the same variable.
+    scopes: Vec<HashMap<String, bool>>,
 }
 
 impl Emitter {
@@ -343,18 +399,48 @@ impl Emitter {
     }
 
     fn emit_block(&mut self, block: &Block, level: usize) -> Result<(), CodegenError> {
+        self.scopes.push(HashMap::new());
         for stmt in &block.stmts {
             self.emit_stmt(stmt, level)?;
         }
+        self.scopes.pop();
         Ok(())
     }
 
     fn emit_stmt(&mut self, stmt: &Stmt, level: usize) -> Result<(), CodegenError> {
         match stmt {
-            Stmt::Let { name, value, .. } => {
+            Stmt::Let {
+                name,
+                value,
+                mutable,
+                ..
+            } => {
                 let v = self.emit_expr(value)?;
                 indent(level, &mut self.out);
-                let _ = writeln!(self.out, "WValue {} = {};", local(name), v);
+                match self.scopes.last().and_then(|s| s.get(name)).copied() {
+                    // A same-scope rebind of a `let mut` binding: the interpreter
+                    // updates the value in place, so emit a C assignment rather
+                    // than a second declaration of the same variable.
+                    Some(true) => {
+                        let _ = writeln!(self.out, "{} = {};", local(name), v);
+                    }
+                    // Rebinding a non-`mut` binding is a runtime error in the
+                    // interpreter; reproduce it as a trap (with the same message)
+                    // so the two engines agree instead of the C compiler failing.
+                    Some(false) => {
+                        let _ = writeln!(
+                            self.out,
+                            "(void)({v}); w_trap(\"cannot rebind `{name}`: it is immutable (declare it with `let mut` to allow rebinding)\");"
+                        );
+                    }
+                    // A fresh binding in this scope.
+                    None => {
+                        let _ = writeln!(self.out, "WValue {} = {};", local(name), v);
+                        if let Some(scope) = self.scopes.last_mut() {
+                            scope.insert(name.clone(), *mutable);
+                        }
+                    }
+                }
             }
             Stmt::Expr(e) => {
                 let v = self.emit_expr(e)?;
@@ -389,18 +475,26 @@ impl Emitter {
                 }
                 self.out.push('\n');
             }
-            // A lowered contract check. Trapping reproduces the interpreter's
-            // exact message, so runtime failures read identically across engines.
+            // A lowered contract check. The trap reproduces the interpreter's
+            // exact code, message, and blame (`C0001`/`C0002`), so runtime
+            // failures read identically — and machine-readably — across engines.
             Stmt::Check {
                 predicate, blame, ..
             } => {
                 let p = self.emit_expr(predicate)?;
-                let msg = match blame {
-                    Blame::Caller => "precondition violated (blame: caller)",
-                    Blame::Implementation => "postcondition violated (blame: implementation)",
+                let (code, msg, blame_str) = match blame {
+                    Blame::Caller => ("C0001", "precondition violated (blame: caller)", "caller"),
+                    Blame::Implementation => (
+                        "C0002",
+                        "postcondition violated (blame: implementation)",
+                        "implementation",
+                    ),
                 };
                 indent(level, &mut self.out);
-                let _ = writeln!(self.out, "if (!w_as_bool({p})) w_trap(\"{msg}\");");
+                let _ = writeln!(
+                    self.out,
+                    "if (!w_as_bool({p})) w_fail_blamed(\"{code}\", \"{msg}\", \"{blame_str}\");"
+                );
             }
         }
         Ok(())
@@ -686,10 +780,26 @@ fn local(name: &str) -> String {
     format!("v_{}", sanitize(name))
 }
 
+/// Map a Writ name to a valid C identifier body **injectively**, so two
+/// distinct Writ names can never collide. An ASCII alphanumeric maps to itself;
+/// `_` is doubled (`__`); every other character becomes `_<hex>_` (its Unicode
+/// scalar in hex, delimited). Since a lone `_` never survives unescaped, an
+/// output `_` only ever introduces one of those two escapes — so the mapping is
+/// reversible, hence injective. In particular the linked cross-module name
+/// `foo.bar` (→ `foo_2e_bar`) can no longer collide with a local `foo_bar`
+/// (→ `foo__bar`).
 fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if c == '_' {
+            out.push_str("__");
+        } else {
+            let _ = write!(out, "_{:x}_", c as u32);
+        }
+    }
+    out
 }
 
 /// Escape a Writ text value for a C string literal.
@@ -714,5 +824,35 @@ fn c_escape(s: &str) -> String {
 fn indent(level: usize, out: &mut String) {
     for _ in 0..level {
         out.push_str("    ");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cname, sanitize};
+    use std::collections::HashMap;
+
+    #[test]
+    fn sanitize_is_injective_over_collision_prone_names() {
+        // The historical collision (#150): a linked cross-module name and a
+        // local that used to both map to `foo_bar` must now differ.
+        assert_ne!(sanitize("foo.bar"), sanitize("foo_bar"));
+        assert_ne!(cname("foo.bar"), cname("foo_bar"));
+    }
+
+    #[test]
+    fn distinct_names_never_share_a_c_identifier() {
+        // Every pair drawn from a set of names that all previously mangled to
+        // `a_b_c` must now map to distinct C identifiers.
+        let names = [
+            "a.b.c", "a_b_c", "a.b_c", "a_b.c", "a__b", "a.b", "a_b", "a-b",
+        ];
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for n in names {
+            let mangled = cname(n);
+            if let Some(prev) = seen.insert(mangled.clone(), n) {
+                panic!("`{n}` and `{prev}` both mangle to `{mangled}`");
+            }
+        }
     }
 }
