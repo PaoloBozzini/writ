@@ -17,6 +17,10 @@ const CORPUS: &[&str] = &[
      fn main() { print(add(3, 4)); print(2 * 5 - 1); }",
     // Booleans and short-circuit operators.
     "fn main() { print(1 < 2 && true); print(false || 3 >= 3); print(!true); }",
+    // Text with embedded newlines and tabs — the harness must compare raw
+    // stdout, not line-split output, or this falsely fails even when the
+    // engines agree (#153).
+    "fn main() { print(\"a\\nb\"); print(\"c\\td\"); print(\"e\"); }",
     // Conditionals and recursion.
     "fn fact(n: Int) -> Int { if n <= 1 { return 1; } return n * fact(n - 1); }\n\
      fn main() { print(fact(5)); }",
@@ -100,8 +104,12 @@ fn scratch(tag: &str) -> PathBuf {
     dir
 }
 
-/// The interpreter's output for a source file.
-fn interpret(src_path: &Path) -> Vec<String> {
+/// The interpreter's **raw stdout** for a source file — every printed value
+/// followed by a newline, exactly as the CLI and the native binary emit it.
+/// Returning the concatenated string (rather than a `Vec` of lines) is
+/// newline-safe: a value that itself contains `\n` is not mistaken for two
+/// separate outputs.
+fn interpret(src_path: &Path) -> String {
     let (program, diags) = writ_cli::load_program(src_path);
     let mut all = diags;
     all.extend(writ_cli::check(&program));
@@ -109,21 +117,51 @@ fn interpret(src_path: &Path) -> Vec<String> {
         !all.iter().any(writ_ast::Diagnostic::is_error),
         "corpus program should check cleanly: {all:?}"
     );
-    writ_cli::run(&program).expect("interpreter run")
+    writ_cli::run(&program)
+        .expect("interpreter run")
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
-/// The native binary's stdout for a source file, as lines.
-fn native(program_dir: &Path, src_path: &Path) -> Vec<String> {
+/// The native binary's **raw stdout** for a source file. Compared byte-for-byte
+/// against the interpreter's (no line splitting), so embedded newlines agree.
+fn native(program_dir: &Path, src_path: &Path) -> String {
     let (program, _) = writ_cli::load_program(src_path);
     let bin = program_dir.join("prog");
     writ_cli::build(&program, &bin).expect("native build");
     let out = Command::new(&bin).output().expect("run native binary");
     assert!(out.status.success(), "native binary exited non-zero");
-    String::from_utf8(out.stdout)
-        .expect("utf8 output")
-        .lines()
-        .map(str::to_string)
-        .collect()
+    String::from_utf8(out.stdout).expect("utf8 output")
+}
+
+/// Assert both engines **fail** on `src` with a shared message keyword: the
+/// interpreter returns an error and the native binary exits non-zero, each
+/// mentioning `keyword`. This is the per-builtin-family trap-parity check the
+/// success-only corpus cannot express.
+fn assert_trap_parity(tag: &str, src: &str, keyword: &str) {
+    let dir = scratch(tag);
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, src).expect("write source");
+    let (program, _) = writ_cli::load_program(&src_path);
+
+    let err = writ_cli::run(&program).expect_err("interpreter should trap");
+    assert!(
+        err.to_string().contains(keyword),
+        "interpreter message should mention {keyword:?}: {err}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(!out.status.success(), "native binary should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(keyword),
+        "native stderr should mention {keyword:?}: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -177,4 +215,50 @@ fn a_violated_precondition_traps_in_the_native_binary() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- Trap parity, one per builtin error family (#153) ----------------------
+
+#[test]
+fn arithmetic_trap_parity() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    assert_trap_parity(
+        "trap_arith",
+        "fn main() { print(1 / 0); }",
+        "division by zero",
+    );
+}
+
+#[test]
+fn text_builtin_trap_parity() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // `char_at` past the end fails on both engines with an out-of-range message.
+    assert_trap_parity(
+        "trap_text",
+        "fn main() { print(char_at(\"ab\", 5)); }",
+        "range",
+    );
+}
+
+#[test]
+fn file_io_trap_parity() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Reading a path that does not exist fails on both engines; each message
+    // names the `read_file` builtin.
+    assert_trap_parity(
+        "trap_io",
+        "fn main(root: Cap<Root>) uses { Read } {\n\
+            print(read_file(grant<Read>(root), \"/writ/no/such/path\"));\n\
+         }",
+        "read_file",
+    );
 }
