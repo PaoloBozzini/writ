@@ -565,6 +565,46 @@ fn sanitize_needs_a_validator_argument() {
     assert_eq!(cs, vec!["T0004"]);
 }
 
+// --- Equality only on comparable types (#147) ------------------------------
+
+#[test]
+fn comparing_function_values_is_refused() {
+    // interp errors at runtime, native compares pointers and prints `true`.
+    let cs = codes("fn inc(n: Int) -> Int { return n + 1; }\nfn main() { print(inc == inc); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn comparing_capabilities_is_refused() {
+    let cs = codes("fn f(a: Cap<Write>, b: Cap<Write>) { let x = a == b; }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn comparing_unit_values_is_refused() {
+    // `print` returns `Unit`; comparing two of them has no defined semantics.
+    let cs = codes("fn f() { let x = print(1) == print(2); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn not_equal_on_a_function_is_also_refused() {
+    let cs = codes("fn inc(n: Int) -> Int { return n + 1; }\nfn main() { print(inc != inc); }");
+    assert_eq!(cs, vec!["T0017"]);
+}
+
+#[test]
+fn equality_on_comparable_types_still_checks() {
+    // Int, Bool, Text, and sum types remain comparable.
+    assert_ok(
+        "type Pair = P(Int, Int)\n\
+         fn main() {\n\
+            print(1 == 2); print(true == false); print(\"x\" == \"y\");\n\
+            print(P(1, 2) == P(1, 2)); print(P(1, 2) != P(3, 4));\n\
+         }",
+    );
+}
+
 // --- Missing return (#145): a non-Unit function must return on every path --
 
 #[test]

@@ -140,6 +140,20 @@ fn signature_types(sig: &Signature) -> FnSig {
     }
 }
 
+/// If `ty` has no defined `==`/`!=` semantics, returns a plural noun naming its
+/// kind (for the diagnostic). Functions, capabilities, and `Unit` are
+/// uncomparable: the spec gives them no equality and the two engines disagree.
+/// Everything else — `Int`, `Bool`, `Text`, and sum types — compares
+/// structurally and identically on both engines.
+fn uncomparable_kind(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Fn { .. } => Some("functions"),
+        Type::Unit => Some("`Unit` values"),
+        Type::Named { name, .. } if name == CAP => Some("capabilities"),
+        _ => None,
+    }
+}
+
 /// Whether a block guarantees a `return` on every path — i.e. control cannot
 /// fall off its end. True iff some statement definitely returns (statements
 /// after it are unreachable, which is fine for this liveness question).
@@ -954,7 +968,24 @@ impl<'m> Checker<'m> {
                 Type::Bool
             }
             Eq | Ne => {
-                if !lt.compatible(rt) {
+                // Equality is defined only for types with structural value
+                // semantics (`Int`, `Bool`, `Text`, sum types). Functions,
+                // capabilities, and `Unit` have no spec'd equality and the
+                // engines disagree (interp errors, native compares pointers /
+                // strings / treats `Unit` as equal), so refuse them statically
+                // (T0017) before that divergence can happen.
+                let offender = uncomparable_kind(lt)
+                    .map(|k| (lt, k))
+                    .or_else(|| uncomparable_kind(rt).map(|k| (rt, k)));
+                if let Some((ty, kind)) = offender {
+                    self.error(
+                        "T0017",
+                        span,
+                        format!(
+                            "cannot compare {kind}: `==`/`!=` has no defined semantics for `{ty}`"
+                        ),
+                    );
+                } else if !lt.compatible(rt) {
                     self.error(
                         "T0001",
                         span,
