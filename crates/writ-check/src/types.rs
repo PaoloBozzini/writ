@@ -144,6 +144,50 @@ fn signature_types(sig: &Signature) -> FnSig {
     }
 }
 
+/// If `ty` has no defined `==`/`!=` semantics, returns a plural noun naming its
+/// kind (for the diagnostic). Functions, capabilities, and `Unit` are
+/// uncomparable: the spec gives them no equality and the two engines disagree.
+/// Everything else — `Int`, `Bool`, `Text`, and sum types — compares
+/// structurally and identically on both engines.
+fn uncomparable_kind(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Fn { .. } => Some("functions"),
+        Type::Unit => Some("`Unit` values"),
+        Type::Named { name, .. } if name == CAP => Some("capabilities"),
+        _ => None,
+    }
+}
+
+/// Whether a block guarantees a `return` on every path — i.e. control cannot
+/// fall off its end. True iff some statement definitely returns (statements
+/// after it are unreachable, which is fine for this liveness question).
+///
+/// The only surface constructs that return are `return` itself and an `if`
+/// whose `then` **and** `else` branches both always return. A `match` used as a
+/// statement never returns: its arm bodies are expressions, not statements, so
+/// `return` cannot appear inside one — a tail `match` (rather than
+/// `return match ...`) therefore correctly counts as a fall-off.
+fn block_always_returns(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_always_returns)
+}
+
+fn stmt_always_returns(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } => true,
+        Stmt::If {
+            then_block,
+            else_block: Some(else_block),
+            ..
+        } => block_always_returns(then_block) && block_always_returns(else_block),
+        Stmt::If {
+            else_block: None, ..
+        }
+        | Stmt::Let { .. }
+        | Stmt::Expr(_)
+        | Stmt::Check { .. } => false,
+    }
+}
+
 /// If `ty` is a capability type `Cap<A>`, returns the authority name `A`.
 fn cap_authority(ty: &Type) -> Option<&str> {
     match ty {
@@ -294,6 +338,34 @@ impl<'m> Checker<'m> {
         self.check_contracts(sig);
         self.check_result_reserved(sig, body);
         self.check_block(body);
+        self.check_missing_return(sig, body);
+    }
+
+    /// Enforce that a function declared `-> T` (with `T` a real, non-`Unit`
+    /// type) returns on **every** path. Falling off the end of such a function
+    /// is a compile error (`T0016`): the interpreter would flow the last
+    /// statement's value out while the C back end appends `return w_unit()`, so
+    /// an unreturned path is a silent engine divergence — exactly the subtle
+    /// wrongness the prime directive turns into a compile error.
+    ///
+    /// A `Unit` return (whether written or defaulted) needs no return, and a
+    /// return type that failed to resolve (`Error`/`Infer`) is skipped so a
+    /// prior diagnostic does not cascade.
+    fn check_missing_return(&mut self, sig: &Signature, body: &Block) {
+        let ret = sig.return_type.as_ref().map_or(Type::Unit, Type::resolve);
+        if matches!(ret, Type::Unit | Type::Error | Type::Infer) {
+            return;
+        }
+        if !block_always_returns(body) {
+            self.error(
+                "T0016",
+                sig.span,
+                format!(
+                    "function `{}` may fall off the end without returning its `{ret}`: add a `return` on every path",
+                    sig.name
+                ),
+            );
+        }
     }
 
     /// In a function that declares `ensures`, `result` is reserved: contract
@@ -952,7 +1024,24 @@ impl<'m> Checker<'m> {
                 Type::Bool
             }
             Eq | Ne => {
-                if !lt.compatible(rt) {
+                // Equality is defined only for types with structural value
+                // semantics (`Int`, `Bool`, `Text`, sum types). Functions,
+                // capabilities, and `Unit` have no spec'd equality and the
+                // engines disagree (interp errors, native compares pointers /
+                // strings / treats `Unit` as equal), so refuse them statically
+                // (T0017) before that divergence can happen.
+                let offender = uncomparable_kind(lt)
+                    .map(|k| (lt, k))
+                    .or_else(|| uncomparable_kind(rt).map(|k| (rt, k)));
+                if let Some((ty, kind)) = offender {
+                    self.error(
+                        "T0017",
+                        span,
+                        format!(
+                            "cannot compare {kind}: `==`/`!=` has no defined semantics for `{ty}`"
+                        ),
+                    );
+                } else if !lt.compatible(rt) {
                     self.error(
                         "T0001",
                         span,
