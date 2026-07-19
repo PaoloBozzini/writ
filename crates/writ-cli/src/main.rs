@@ -53,16 +53,18 @@ fn run(path: &std::path::Path) -> ExitCode {
     if diagnostics.iter().any(writ_ast::Diagnostic::is_error) {
         return report(&diagnostics);
     }
-    match writ_cli::run(&program) {
-        Ok(output) => {
-            for line in output {
-                println!("{line}");
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            // Runtime errors serialize under the same machine-readable schema.
-            println!("{}", diagnostics_to_json(&[e.to_diagnostic()]));
+    // Prints go to stdout; any runtime error goes to stderr as one machine-
+    // readable Diagnostic — the same split the native binary uses (stdout for
+    // output, stderr for the trap). Output printed before a failure is
+    // preserved (issue #152).
+    let (output, err) = writ_cli::run_collecting(&program);
+    for line in output {
+        println!("{line}");
+    }
+    match err {
+        None => ExitCode::SUCCESS,
+        Some(e) => {
+            eprintln!("{}", diagnostics_to_json(&[e.to_diagnostic()]));
             ExitCode::FAILURE
         }
     }

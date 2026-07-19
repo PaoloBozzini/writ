@@ -35,6 +35,10 @@ const SANITIZE: &str = "sanitize";
 /// The type-head marking untrusted data.
 const TAINTED: &str = "Tainted";
 
+/// The name contract lowering binds to a function's returned value for its
+/// `ensures` predicate — reserved from user bindings in an `ensures` function.
+const RESULT: &str = "result";
+
 /// Type-check a module, returning all type diagnostics in source order. An empty
 /// result means the module is well-typed.
 #[must_use]
@@ -80,22 +84,47 @@ fn check_main_signature(module: &Module) -> Vec<Diagnostic> {
 }
 
 /// Report duplicate top-level names statically: two functions with the same
-/// name, or two sum-type variants with the same name (within or across type
-/// declarations). A duplicated name is a classic generation slip; the prime
-/// directive says it should be a compile error, not a runtime refusal. The
-/// diagnostic points at the **second** definition.
+/// name (`T0010`), two sum-type variants with the same name (`T0011`), or a
+/// function whose name collides with a visible variant constructor (`T0019`).
+/// A duplicated name is a classic generation slip; because functions and
+/// nullary constructors share call syntax (`Some(x)`, `None`), a function
+/// named after a constructor — including a **prelude** one like `Some` — makes
+/// ambiguous call sites. The prime directive says it should be a compile error,
+/// not a runtime surprise. The diagnostic points at the **second** definition.
 fn check_duplicate_names(module: &Module) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut seen_fns: HashSet<&str> = HashSet::new();
     let mut seen_variants: HashSet<&str> = HashSet::new();
+
+    // Every variant constructor name declared in the (already prelude-injected)
+    // module, so a function colliding with one can be reported.
+    let ctors: HashSet<&str> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(decl) => Some(decl.variants.iter().map(|v| v.name.as_str())),
+            Item::Function(_) => None,
+        })
+        .flatten()
+        .collect();
+
     for item in &module.items {
         match item {
             Item::Function(f) => {
-                if !seen_fns.insert(f.signature.name.as_str()) {
+                let name = f.signature.name.as_str();
+                if !seen_fns.insert(name) {
                     diagnostics.push(Diagnostic::error(
                         "T0010",
                         f.signature.span,
-                        format!("function `{}` is defined more than once", f.signature.name),
+                        format!("function `{name}` is defined more than once"),
+                    ));
+                } else if ctors.contains(name) {
+                    diagnostics.push(Diagnostic::error(
+                        "T0019",
+                        f.signature.span,
+                        format!(
+                            "function `{name}` has the same name as a variant constructor: constructors and functions share call syntax, so rename one"
+                        ),
                     ));
                 }
             }
@@ -139,6 +168,50 @@ fn signature_types(sig: &Signature) -> FnSig {
         params: sig.params.iter().map(|p| Type::resolve(&p.ty)).collect(),
         ret: sig.return_type.as_ref().map_or(Type::Unit, Type::resolve),
         pure: sig.effects.effects.is_empty(),
+    }
+}
+
+/// If `ty` has no defined `==`/`!=` semantics, returns a plural noun naming its
+/// kind (for the diagnostic). Functions, capabilities, and `Unit` are
+/// uncomparable: the spec gives them no equality and the two engines disagree.
+/// Everything else — `Int`, `Bool`, `Text`, and sum types — compares
+/// structurally and identically on both engines.
+fn uncomparable_kind(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Fn { .. } => Some("functions"),
+        Type::Unit => Some("`Unit` values"),
+        Type::Named { name, .. } if name == CAP => Some("capabilities"),
+        _ => None,
+    }
+}
+
+/// Whether a block guarantees a `return` on every path — i.e. control cannot
+/// fall off its end. True iff some statement definitely returns (statements
+/// after it are unreachable, which is fine for this liveness question).
+///
+/// The only surface constructs that return are `return` itself and an `if`
+/// whose `then` **and** `else` branches both always return. A `match` used as a
+/// statement never returns: its arm bodies are expressions, not statements, so
+/// `return` cannot appear inside one — a tail `match` (rather than
+/// `return match ...`) therefore correctly counts as a fall-off.
+fn block_always_returns(block: &Block) -> bool {
+    block.stmts.iter().any(stmt_always_returns)
+}
+
+fn stmt_always_returns(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return { .. } => true,
+        Stmt::If {
+            then_block,
+            else_block: Some(else_block),
+            ..
+        } => block_always_returns(then_block) && block_always_returns(else_block),
+        Stmt::If {
+            else_block: None, ..
+        }
+        | Stmt::Let { .. }
+        | Stmt::Expr(_)
+        | Stmt::Check { .. } => false,
     }
 }
 
@@ -290,7 +363,87 @@ impl<'m> Checker<'m> {
             self.bind(param.name.clone(), Type::resolve(&param.ty));
         }
         self.check_contracts(sig);
+        self.check_result_reserved(sig, body);
         self.check_block(body);
+        self.check_missing_return(sig, body);
+    }
+
+    /// Enforce that a function declared `-> T` (with `T` a real, non-`Unit`
+    /// type) returns on **every** path. Falling off the end of such a function
+    /// is a compile error (`T0016`): the interpreter would flow the last
+    /// statement's value out while the C back end appends `return w_unit()`, so
+    /// an unreturned path is a silent engine divergence — exactly the subtle
+    /// wrongness the prime directive turns into a compile error.
+    ///
+    /// A `Unit` return (whether written or defaulted) needs no return, and a
+    /// return type that failed to resolve (`Error`/`Infer`) is skipped so a
+    /// prior diagnostic does not cascade.
+    fn check_missing_return(&mut self, sig: &Signature, body: &Block) {
+        let ret = sig.return_type.as_ref().map_or(Type::Unit, Type::resolve);
+        if matches!(ret, Type::Unit | Type::Error | Type::Infer) {
+            return;
+        }
+        if !block_always_returns(body) {
+            self.error(
+                "T0016",
+                sig.span,
+                format!(
+                    "function `{}` may fall off the end without returning its `{ret}`: add a `return` on every path",
+                    sig.name
+                ),
+            );
+        }
+    }
+
+    /// In a function that declares `ensures`, `result` is reserved: contract
+    /// lowering injects `let result = <return expr>` on every exit to bind the
+    /// returned value the `ensures` predicate reads. A user parameter or local
+    /// named `result` would collide with that injection and break the function
+    /// differently per engine (the interpreter refuses the rebind; the C back
+    /// end emits a redefinition), on checker-clean code. Refuse the collision
+    /// statically (`T0018`) at the offending binding — matching the spec's
+    /// documented `result` keyword.
+    fn check_result_reserved(&mut self, sig: &Signature, body: &Block) {
+        if sig.ensures.is_empty() {
+            return;
+        }
+        for param in &sig.params {
+            if param.name == RESULT {
+                self.error(
+                    "T0018",
+                    param.span,
+                    "`result` is reserved in a function with an `ensures` clause (it names the returned value): rename this parameter",
+                );
+            }
+        }
+        self.check_no_result_binding(&body.stmts);
+    }
+
+    /// Report every `let result` in an `ensures` function's body, recursing into
+    /// `if` branches (the only other place a binding can appear).
+    fn check_no_result_binding(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { name, span, .. } if name == RESULT => {
+                    self.error(
+                        "T0018",
+                        *span,
+                        "`result` is reserved in a function with an `ensures` clause (it names the returned value): rename this local",
+                    );
+                }
+                Stmt::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    self.check_no_result_binding(&then_block.stmts);
+                    if let Some(else_block) = else_block {
+                        self.check_no_result_binding(&else_block.stmts);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Type-check the signature's contract predicates. A `requires` sees the
@@ -668,11 +821,13 @@ impl<'m> Checker<'m> {
     }
 
     /// Whether a variant pattern owned by `owner` may match a scrutinee of type
-    /// `scrutinee_ty`. A pattern from a *different* sum type is a compile error
-    /// (naming both types); it never contributes to coverage and its payload
-    /// bindings are not instantiated from the wrong type. When the scrutinee is
-    /// not a known sum type (already an error, or `Infer`), no second diagnostic
-    /// is raised.
+    /// `scrutinee_ty`. A pattern whose owner is not the scrutinee's type — a
+    /// *different* sum type, or a **primitive** (`Int`, `Bool`, `Text`, `Unit`)
+    /// or other concrete type a variant can never inhabit — is a compile error
+    /// (`T0012`, naming both types); it never contributes to coverage and its
+    /// payload bindings are not instantiated from the wrong type. Only an
+    /// already-erroneous (`Error`) or undetermined (`Infer`) scrutinee is left
+    /// alone, so a single earlier mistake does not cascade.
     fn variant_matches_scrutinee(
         &mut self,
         owner: &str,
@@ -681,22 +836,24 @@ impl<'m> Checker<'m> {
         span: Span,
     ) -> bool {
         match scrutinee_ty {
-            Type::Named { name, .. } if self.sum_variants.contains_key(name.as_str()) => {
-                if name == owner {
-                    true
-                } else {
-                    self.error(
-                        "T0012",
-                        span,
-                        format!(
-                            "pattern `{pattern_name}` belongs to type `{owner}`, but the matched value has type `{name}`"
-                        ),
-                    );
-                    false
-                }
+            // `owner` is by construction a sum type, so a scrutinee named the
+            // same is that sum type — the pattern belongs here.
+            Type::Named { name, .. } if name == owner => true,
+            // Don't pile a second error onto an already-broken or undetermined
+            // scrutinee.
+            Type::Error | Type::Infer => true,
+            // Any other concrete type — a different sum type, a primitive, a
+            // capability, or a function — cannot hold this variant.
+            other => {
+                self.error(
+                    "T0012",
+                    span,
+                    format!(
+                        "pattern `{pattern_name}` belongs to type `{owner}`, but the matched value has type `{other}`"
+                    ),
+                );
+                false
             }
-            // Not a known sum type: don't pile a second error onto the scrutinee.
-            _ => true,
         }
     }
 
@@ -898,7 +1055,24 @@ impl<'m> Checker<'m> {
                 Type::Bool
             }
             Eq | Ne => {
-                if !lt.compatible(rt) {
+                // Equality is defined only for types with structural value
+                // semantics (`Int`, `Bool`, `Text`, sum types). Functions,
+                // capabilities, and `Unit` have no spec'd equality and the
+                // engines disagree (interp errors, native compares pointers /
+                // strings / treats `Unit` as equal), so refuse them statically
+                // (T0017) before that divergence can happen.
+                let offender = uncomparable_kind(lt)
+                    .map(|k| (lt, k))
+                    .or_else(|| uncomparable_kind(rt).map(|k| (rt, k)));
+                if let Some((ty, kind)) = offender {
+                    self.error(
+                        "T0017",
+                        span,
+                        format!(
+                            "cannot compare {kind}: `==`/`!=` has no defined semantics for `{ty}`"
+                        ),
+                    );
+                } else if !lt.compatible(rt) {
                     self.error(
                         "T0001",
                         span,
