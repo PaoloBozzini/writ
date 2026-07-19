@@ -757,10 +757,26 @@ fn local(name: &str) -> String {
     format!("v_{}", sanitize(name))
 }
 
+/// Map a Writ name to a valid C identifier body **injectively**, so two
+/// distinct Writ names can never collide. An ASCII alphanumeric maps to itself;
+/// `_` is doubled (`__`); every other character becomes `_<hex>_` (its Unicode
+/// scalar in hex, delimited). Since a lone `_` never survives unescaped, an
+/// output `_` only ever introduces one of those two escapes — so the mapping is
+/// reversible, hence injective. In particular the linked cross-module name
+/// `foo.bar` (→ `foo_2e_bar`) can no longer collide with a local `foo_bar`
+/// (→ `foo__bar`).
 fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if c == '_' {
+            out.push_str("__");
+        } else {
+            let _ = write!(out, "_{:x}_", c as u32);
+        }
+    }
+    out
 }
 
 /// Escape a Writ text value for a C string literal.
@@ -785,5 +801,35 @@ fn c_escape(s: &str) -> String {
 fn indent(level: usize, out: &mut String) {
     for _ in 0..level {
         out.push_str("    ");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cname, sanitize};
+    use std::collections::HashMap;
+
+    #[test]
+    fn sanitize_is_injective_over_collision_prone_names() {
+        // The historical collision (#150): a linked cross-module name and a
+        // local that used to both map to `foo_bar` must now differ.
+        assert_ne!(sanitize("foo.bar"), sanitize("foo_bar"));
+        assert_ne!(cname("foo.bar"), cname("foo_bar"));
+    }
+
+    #[test]
+    fn distinct_names_never_share_a_c_identifier() {
+        // Every pair drawn from a set of names that all previously mangled to
+        // `a_b_c` must now map to distinct C identifiers.
+        let names = [
+            "a.b.c", "a_b_c", "a.b_c", "a_b.c", "a__b", "a.b", "a_b", "a-b",
+        ];
+        let mut seen: HashMap<String, &str> = HashMap::new();
+        for n in names {
+            let mangled = cname(n);
+            if let Some(prev) = seen.insert(mangled.clone(), n) {
+                panic!("`{n}` and `{prev}` both mangle to `{mangled}`");
+            }
+        }
     }
 }
