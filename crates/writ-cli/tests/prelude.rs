@@ -103,3 +103,20 @@ fn prelude_types_compile_natively() {
     assert_eq!(String::from_utf8(out.stdout).unwrap(), "7\n0\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_function_named_after_a_prelude_constructor_is_refused() {
+    // `fn Some` collides with the prelude's `Option` constructor even with no
+    // user `type` declaration; linking injects the prelude, so the full check
+    // pipeline reports the collision (#158, T0019).
+    let dir = scratch("ctor_collision");
+    let path = write_main(&dir, "fn Some() -> Int { return 1; }\nfn main() {}");
+    let (program, mut diags) = writ_cli::load_program(&path);
+    diags.extend(writ_cli::check(&program));
+    let codes: Vec<String> = diags.into_iter().map(|d| d.code).collect();
+    assert!(
+        codes.contains(&"T0019".to_string()),
+        "prelude constructor collision: {codes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

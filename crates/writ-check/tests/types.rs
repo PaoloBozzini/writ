@@ -743,3 +743,19 @@ fn the_variant_on_primitive_diagnostic_names_both_types() {
     assert!(d.message.contains("`Opt`"), "{}", d.message);
     assert!(d.message.contains("`Int`"), "{}", d.message);
 }
+
+// --- Function vs. constructor name collision (#158) ------------------------
+
+#[test]
+fn a_function_named_after_a_local_constructor_is_refused() {
+    let cs = codes("type Opt = Some(Int) | None\nfn Some() -> Int { return 1; }");
+    assert!(
+        cs.contains(&"T0019".to_string()),
+        "expected T0019, got {cs:?}"
+    );
+}
+
+#[test]
+fn a_function_not_colliding_with_a_constructor_is_fine() {
+    assert_ok("type Opt = Some(Int) | None\nfn unwrap() -> Int { return 1; }");
+}

@@ -82,22 +82,47 @@ fn check_main_signature(module: &Module) -> Vec<Diagnostic> {
 }
 
 /// Report duplicate top-level names statically: two functions with the same
-/// name, or two sum-type variants with the same name (within or across type
-/// declarations). A duplicated name is a classic generation slip; the prime
-/// directive says it should be a compile error, not a runtime refusal. The
-/// diagnostic points at the **second** definition.
+/// name (`T0010`), two sum-type variants with the same name (`T0011`), or a
+/// function whose name collides with a visible variant constructor (`T0019`).
+/// A duplicated name is a classic generation slip; because functions and
+/// nullary constructors share call syntax (`Some(x)`, `None`), a function
+/// named after a constructor — including a **prelude** one like `Some` — makes
+/// ambiguous call sites. The prime directive says it should be a compile error,
+/// not a runtime surprise. The diagnostic points at the **second** definition.
 fn check_duplicate_names(module: &Module) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let mut seen_fns: HashSet<&str> = HashSet::new();
     let mut seen_variants: HashSet<&str> = HashSet::new();
+
+    // Every variant constructor name declared in the (already prelude-injected)
+    // module, so a function colliding with one can be reported.
+    let ctors: HashSet<&str> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(decl) => Some(decl.variants.iter().map(|v| v.name.as_str())),
+            Item::Function(_) => None,
+        })
+        .flatten()
+        .collect();
+
     for item in &module.items {
         match item {
             Item::Function(f) => {
-                if !seen_fns.insert(f.signature.name.as_str()) {
+                let name = f.signature.name.as_str();
+                if !seen_fns.insert(name) {
                     diagnostics.push(Diagnostic::error(
                         "T0010",
                         f.signature.span,
-                        format!("function `{}` is defined more than once", f.signature.name),
+                        format!("function `{name}` is defined more than once"),
+                    ));
+                } else if ctors.contains(name) {
+                    diagnostics.push(Diagnostic::error(
+                        "T0019",
+                        f.signature.span,
+                        format!(
+                            "function `{name}` has the same name as a variant constructor: constructors and functions share call syntax, so rename one"
+                        ),
                     ));
                 }
             }
