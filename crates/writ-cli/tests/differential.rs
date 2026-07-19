@@ -252,9 +252,68 @@ fn a_violated_precondition_traps_in_the_native_binary() {
     let out = Command::new(&bin).output().expect("run native binary");
     assert!(!out.status.success(), "a trapped binary must exit non-zero");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The native trap is a machine-readable diagnostic carrying the stable code
+    // and blame, matching the interpreter's `C0001` / caller (#152).
+    assert!(
+        stderr.contains("\"code\":\"C0001\""),
+        "native code: {stderr}"
+    );
+    assert!(
+        stderr.contains("\"blame\":\"caller\""),
+        "native blame: {stderr}"
+    );
     assert!(
         stderr.contains("precondition violated (blame: caller)"),
         "native trap message: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_failing_program_prints_the_same_partial_output_on_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Output printed before a runtime error is preserved on both engines, and
+    // the error is a machine-readable diagnostic on stderr carrying the same
+    // code — the "errors are an API" contract (#152).
+    let dir = scratch("partial");
+    let src_path = dir.join("main.writ");
+    std::fs::write(
+        &src_path,
+        "fn main() { print(1); print(2); print(10 / 0); }",
+    )
+    .expect("write source");
+    let (program, _) = writ_cli::load_program(&src_path);
+
+    // Interpreter: the two prints survive the error; the error is `E1000`.
+    let (interp_out, interp_err) = writ_cli::run_collecting(&program);
+    assert_eq!(interp_out, vec!["1".to_string(), "2".to_string()]);
+    assert_eq!(interp_err.expect("interpreter should fail").code, "E1000");
+
+    // Native: identical stdout prefix; the trap carries the same code on stderr.
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(
+        !out.status.success(),
+        "a failing program must exit non-zero"
+    );
+    let native_out: Vec<String> = String::from_utf8(out.stdout)
+        .expect("utf8")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        native_out, interp_out,
+        "native and interpreter disagree on partial output"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"code\":\"E1000\""),
+        "native code: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
