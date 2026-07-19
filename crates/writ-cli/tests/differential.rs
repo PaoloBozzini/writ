@@ -40,6 +40,9 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Equality on the primitive comparable types (Int, Bool) agrees (#147).
+    "fn main() { print(1 == 1); print(1 == 2); print(1 != 2);\n\
+        print(true == true); print(true == false); print(true != false); }",
     // Text built-ins, including a multi-byte (UTF-8) string.
     "fn main() {\n\
         let s = concat(\"hel\", \"lo\");\n\
