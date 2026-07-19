@@ -299,6 +299,7 @@ pub fn emit_c(module: &Module) -> Result<String, CodegenError> {
         fn_names,
         out: String::new(),
         counter: 0,
+        scopes: Vec::new(),
     };
     e.out.push_str(PRELUDE);
     e.out.push('\n');
@@ -368,6 +369,11 @@ struct Emitter {
     out: String,
     /// A monotonic counter for unique temporary names (e.g. per `match`).
     counter: usize,
+    /// Locals declared in each open C block scope (name → was it `let mut`),
+    /// innermost last. Used to compile a same-scope rebind — a documented
+    /// interpreter feature — as a C assignment rather than a second (illegal)
+    /// declaration of the same variable.
+    scopes: Vec<HashMap<String, bool>>,
 }
 
 impl Emitter {
@@ -378,18 +384,48 @@ impl Emitter {
     }
 
     fn emit_block(&mut self, block: &Block, level: usize) -> Result<(), CodegenError> {
+        self.scopes.push(HashMap::new());
         for stmt in &block.stmts {
             self.emit_stmt(stmt, level)?;
         }
+        self.scopes.pop();
         Ok(())
     }
 
     fn emit_stmt(&mut self, stmt: &Stmt, level: usize) -> Result<(), CodegenError> {
         match stmt {
-            Stmt::Let { name, value, .. } => {
+            Stmt::Let {
+                name,
+                value,
+                mutable,
+                ..
+            } => {
                 let v = self.emit_expr(value)?;
                 indent(level, &mut self.out);
-                let _ = writeln!(self.out, "WValue {} = {};", local(name), v);
+                match self.scopes.last().and_then(|s| s.get(name)).copied() {
+                    // A same-scope rebind of a `let mut` binding: the interpreter
+                    // updates the value in place, so emit a C assignment rather
+                    // than a second declaration of the same variable.
+                    Some(true) => {
+                        let _ = writeln!(self.out, "{} = {};", local(name), v);
+                    }
+                    // Rebinding a non-`mut` binding is a runtime error in the
+                    // interpreter; reproduce it as a trap (with the same message)
+                    // so the two engines agree instead of the C compiler failing.
+                    Some(false) => {
+                        let _ = writeln!(
+                            self.out,
+                            "(void)({v}); w_trap(\"cannot rebind `{name}`: it is immutable (declare it with `let mut` to allow rebinding)\");"
+                        );
+                    }
+                    // A fresh binding in this scope.
+                    None => {
+                        let _ = writeln!(self.out, "WValue {} = {};", local(name), v);
+                        if let Some(scope) = self.scopes.last_mut() {
+                            scope.insert(name.clone(), *mutable);
+                        }
+                    }
+                }
             }
             Stmt::Expr(e) => {
                 let v = self.emit_expr(e)?;
