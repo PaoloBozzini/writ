@@ -150,3 +150,78 @@ fn handle(input: Tainted<Int>) uses { Query } {
     );
     assert_eq!(cs, vec!["E0401"], "operators must not launder taint");
 }
+
+// --- #143: sum-type wrap/unwrap and HOF calls must not launder taint -------
+
+#[test]
+fn a_constructor_wrap_then_pattern_unwrap_stays_tainted() {
+    // Bypass A: wrap tainted data in `Some(..)`, then bind it back out in a
+    // `match` arm. The binding inherits the scrutinee's taint, so the sink is
+    // still refused.
+    let cs = taint_codes(
+        "\
+type Option<T> = Some(T) | None
+fn run_query(q: Tainted<Text>) uses { Query } { return; }
+fn nothing() { return; }
+fn handle(input: Tainted<Text>) uses { Query } {
+    let boxed = Some(input);
+    match boxed { Some(x) => run_query(x), None => nothing() };
+}
+",
+    );
+    assert_eq!(
+        cs,
+        vec!["E0401"],
+        "constructor wrap/unwrap must not launder"
+    );
+}
+
+#[test]
+fn a_let_bound_unwrap_of_a_tainted_constructor_stays_tainted() {
+    // The same laundering attempt, this time re-boxing the extracted binding.
+    let cs = taint_codes(
+        "\
+type Option<T> = Some(T) | None
+fn run_query(q: Tainted<Text>) uses { Query } { return; }
+fn handle(input: Tainted<Text>) uses { Query } {
+    let y = match Some(input) { Some(x) => x, None => input };
+    run_query(y);
+}
+",
+    );
+    assert_eq!(cs, vec!["E0401"], "unwrapping a tainted box stays tainted");
+}
+
+#[test]
+fn a_call_through_a_tainting_fn_parameter_is_tainted() {
+    // Bypass B: call a `fn(Tainted<T>) -> Tainted<T>` parameter; its result is
+    // tainted, so passing it to a sink is refused.
+    let cs = taint_codes(
+        "\
+fn run_query(q: Tainted<Text>) uses { Query } { return; }
+fn handle(f: fn(Tainted<Text>) -> Tainted<Text>, input: Tainted<Text>) uses { Query } {
+    run_query(f(input));
+}
+",
+    );
+    assert_eq!(
+        cs,
+        vec!["E0401"],
+        "a call through a tainting fn param is tainted"
+    );
+}
+
+#[test]
+fn a_call_through_a_non_tainting_fn_parameter_is_clean() {
+    // A `fn(Tainted<T>) -> Text` parameter genuinely de-taints (its declared
+    // return type is trusted), so the sink is allowed.
+    let cs = taint_codes(
+        "\
+fn run_query(q: Text) uses { Query } { return; }
+fn handle(f: fn(Tainted<Text>) -> Text, input: Tainted<Text>) uses { Query } {
+    run_query(f(input));
+}
+",
+    );
+    assert!(cs.is_empty(), "a fn returning Text de-taints: {cs:?}");
+}
