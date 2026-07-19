@@ -78,13 +78,28 @@ static WValue w_variant(const char *name, WValue *fields, int64_t n) {
 }
 static int w_as_bool(WValue v) { return v.i != 0; }
 
-static void w_trap(const char *msg) { fprintf(stderr, "%s\n", msg); exit(1); }
+/* A runtime trap emits a one-line JSON object on stderr carrying the stable
+   diagnostic `code` and (for contract failures) the `blame`, so a tool reading
+   native output gets the same machine-readable signal `writ run` provides. The
+   messages are compile-time constants with no `"`/`\\`, so no JSON escaping is
+   needed. Native binaries carry no source spans, so none is emitted. */
+static void w_fail(const char *code, const char *msg) {
+    fprintf(stderr, "{\"code\":\"%s\",\"severity\":\"error\",\"message\":\"%s\"}\n", code, msg);
+    exit(1);
+}
+static void w_fail_blamed(const char *code, const char *msg, const char *blame) {
+    fprintf(stderr, "{\"code\":\"%s\",\"severity\":\"error\",\"message\":\"%s\",\"blame\":\"%s\"}\n", code, msg, blame);
+    exit(1);
+}
+/* An ordinary (non-contract) runtime error: the generic `E1000` code, matching
+   the interpreter's `RuntimeError::new`. */
+static void w_trap(const char *msg) { w_fail("E1000", msg); }
 
 static WValue w_add(WValue a, WValue b) { int64_t r; if (__builtin_add_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_sub(WValue a, WValue b) { int64_t r; if (__builtin_sub_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_mul(WValue a, WValue b) { int64_t r; if (__builtin_mul_overflow(a.i, b.i, &r)) w_trap("integer overflow"); return w_int(r); }
 static WValue w_div(WValue a, WValue b) { if (b.i == 0) w_trap("division by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i / b.i); }
-static WValue w_rem(WValue a, WValue b) { if (b.i == 0) w_trap("division by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i % b.i); }
+static WValue w_rem(WValue a, WValue b) { if (b.i == 0) w_trap("remainder by zero"); if (a.i == INT64_MIN && b.i == -1) w_trap("integer overflow"); return w_int(a.i % b.i); }
 static WValue w_neg(WValue a) { int64_t r; if (__builtin_sub_overflow((int64_t)0, a.i, &r)) w_trap("integer overflow negating value"); return w_int(r); }
 static WValue w_not(WValue a) { return w_bool(a.i == 0); }
 static WValue w_lt(WValue a, WValue b) { return w_bool(a.i < b.i); }
@@ -389,18 +404,26 @@ impl Emitter {
                 }
                 self.out.push('\n');
             }
-            // A lowered contract check. Trapping reproduces the interpreter's
-            // exact message, so runtime failures read identically across engines.
+            // A lowered contract check. The trap reproduces the interpreter's
+            // exact code, message, and blame (`C0001`/`C0002`), so runtime
+            // failures read identically — and machine-readably — across engines.
             Stmt::Check {
                 predicate, blame, ..
             } => {
                 let p = self.emit_expr(predicate)?;
-                let msg = match blame {
-                    Blame::Caller => "precondition violated (blame: caller)",
-                    Blame::Implementation => "postcondition violated (blame: implementation)",
+                let (code, msg, blame_str) = match blame {
+                    Blame::Caller => ("C0001", "precondition violated (blame: caller)", "caller"),
+                    Blame::Implementation => (
+                        "C0002",
+                        "postcondition violated (blame: implementation)",
+                        "implementation",
+                    ),
                 };
                 indent(level, &mut self.out);
-                let _ = writeln!(self.out, "if (!w_as_bool({p})) w_trap(\"{msg}\");");
+                let _ = writeln!(
+                    self.out,
+                    "if (!w_as_bool({p})) w_fail_blamed(\"{code}\", \"{msg}\", \"{blame_str}\");"
+                );
             }
         }
         Ok(())

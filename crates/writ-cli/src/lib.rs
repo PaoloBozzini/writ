@@ -126,21 +126,42 @@ pub fn check_passes(program: &Program, passes: &[String]) -> Vec<Diagnostic> {
 /// of its capability parameters.
 ///
 /// # Errors
-/// Returns a [`RuntimeError`] if there is no `main`, or execution fails.
+/// Returns a [`RuntimeError`] if there is no `main`, or execution fails. Any
+/// output printed **before** a failure is discarded by this signature; use
+/// [`run_collecting`] to keep it.
 pub fn run(program: &Program) -> Result<Vec<String>, RuntimeError> {
+    match run_collecting(program) {
+        (output, None) => Ok(output),
+        (_, Some(err)) => Err(err),
+    }
+}
+
+/// Run `main`, returning **both** the lines printed and any runtime error.
+///
+/// Partial-output semantics (issue #152): a `print` that ran before a runtime
+/// error **is preserved**, matching the native binary — which streams to stdout
+/// and flushes on trap. So a failing program prints identically on both engines
+/// up to the point of failure; the error diagnostic is a separate channel
+/// (stderr from the CLI). The returned error is `None` on success.
+#[must_use]
+pub fn run_collecting(program: &Program) -> (Vec<String>, Option<RuntimeError>) {
     let linked = writ_lower::link(&program.modules, &program.root);
     // Desugar contracts into shared `Check` nodes (the one place contract
     // semantics live) before handing the program to a back end.
     let lowered = writ_lower::lower(&linked);
-    let interp = Interpreter::new(&lowered)?;
-    let main = lowered
-        .items
-        .iter()
-        .find_map(|it| match it {
-            Item::Function(f) if f.signature.name == "main" => Some(f),
-            _ => None,
-        })
-        .ok_or_else(|| RuntimeError::new(Span::new(0, 0), "no `main` function"))?;
+    let interp = match Interpreter::new(&lowered) {
+        Ok(i) => i,
+        Err(e) => return (Vec::new(), Some(e)),
+    };
+    let Some(main) = lowered.items.iter().find_map(|it| match it {
+        Item::Function(f) if f.signature.name == "main" => Some(f),
+        _ => None,
+    }) else {
+        return (
+            Vec::new(),
+            Some(RuntimeError::new(Span::new(0, 0), "no `main` function")),
+        );
+    };
     let args = main
         .signature
         .params
@@ -157,8 +178,10 @@ pub fn run(program: &Program) -> Result<Vec<String>, RuntimeError> {
             }
         })
         .collect();
-    interp.call("main", args)?;
-    Ok(interp.output())
+    // Take the buffered output regardless of success, so prints made before a
+    // failure survive.
+    let err = interp.call("main", args).err();
+    (interp.output(), err)
 }
 
 /// Statically verify a program's contracts with the bundled `z3`-CLI solver.
