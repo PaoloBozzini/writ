@@ -35,6 +35,9 @@ const CORPUS: &[&str] = &[
     // A precondition that is satisfied.
     "fn half(n: Int) -> Int requires n > 0 { return n / 2; }\n\
      fn main() { print(half(8)); }",
+    // `result` is an ordinary name outside `ensures` — both engines agree (#148).
+    "fn f(n: Int) -> Int { let result = n + 1; return result; }\n\
+     fn main() { print(f(41)); }",
     // Sum types, generic constructors, and `match` (payloads, nullary, catch-all).
     "type Option<T> = Some(T) | None\n\
      fn unwrap_or(o: Option<Int>, d: Int) -> Int { return match o { Some(x) => x, None => d }; }\n\
@@ -44,6 +47,9 @@ const CORPUS: &[&str] = &[
     // Structural equality over variants.
     "type Pair = P(Int, Int)\n\
      fn main() { print(P(1, 2) == P(1, 2)); print(P(1, 2) == P(1, 3)); }",
+    // Equality on the primitive comparable types (Int, Bool) agrees (#147).
+    "fn main() { print(1 == 1); print(1 == 2); print(1 != 2);\n\
+        print(true == true); print(true == false); print(true != false); }",
     // Text built-ins, including a multi-byte (UTF-8) string.
     "fn main() {\n\
         let s = concat(\"hel\", \"lo\");\n\
@@ -61,6 +67,12 @@ const CORPUS: &[&str] = &[
      fn main() {\n\
         print(match sanitize(\"hi\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
         print(match sanitize(\"toolong\", is_short) { Some(x) => x, None => \"REJECTED\" });\n\
+     }",
+    // Same-scope `let mut` rebinding — a documented interpreter feature the C
+    // back end must compile identically (#149), including reading the old value.
+    "fn main() {\n\
+        let mut n = 5; let n = n * 2; print(n);\n\
+        let n = n - 1; print(n);\n\
      }",
     // Higher-order functions: pass and call pure function values.
     "fn apply(f: fn(Int) -> Int, x: Int) -> Int { return f(x); }\n\
@@ -108,7 +120,7 @@ fn scratch(tag: &str) -> PathBuf {
 /// followed by a newline, exactly as the CLI and the native binary emit it.
 /// Returning the concatenated string (rather than a `Vec` of lines) is
 /// newline-safe: a value that itself contains `\n` is not mistaken for two
-/// separate outputs.
+/// separate outputs (#153).
 fn interpret(src_path: &Path) -> String {
     let (program, diags) = writ_cli::load_program(src_path);
     let mut all = diags;
@@ -135,35 +147,6 @@ fn native(program_dir: &Path, src_path: &Path) -> String {
     String::from_utf8(out.stdout).expect("utf8 output")
 }
 
-/// Assert both engines **fail** on `src` with a shared message keyword: the
-/// interpreter returns an error and the native binary exits non-zero, each
-/// mentioning `keyword`. This is the per-builtin-family trap-parity check the
-/// success-only corpus cannot express.
-fn assert_trap_parity(tag: &str, src: &str, keyword: &str) {
-    let dir = scratch(tag);
-    let src_path = dir.join("main.writ");
-    std::fs::write(&src_path, src).expect("write source");
-    let (program, _) = writ_cli::load_program(&src_path);
-
-    let err = writ_cli::run(&program).expect_err("interpreter should trap");
-    assert!(
-        err.to_string().contains(keyword),
-        "interpreter message should mention {keyword:?}: {err}"
-    );
-
-    let bin = dir.join("prog");
-    writ_cli::build(&program, &bin).expect("native build");
-    let out = Command::new(&bin).output().expect("run native binary");
-    assert!(!out.status.success(), "native binary should exit non-zero");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains(keyword),
-        "native stderr should mention {keyword:?}: {stderr}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 #[test]
 fn native_output_matches_interpreter_on_the_corpus() {
     if !have_cc() {
@@ -184,6 +167,75 @@ fn native_output_matches_interpreter_on_the_corpus() {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// The two fall-off-the-end programs from #145 (QA-11). They cannot live in
+/// `CORPUS` — the interpreter would flow the last statement's value out while
+/// the native back end returns `w_unit()`, a silent engine divergence (the
+/// second even yields a wrong *arithmetic* answer with no trap). The fix is a
+/// missing-return **compile error** (`T0016`), so these never reach either
+/// engine. This test locks that in: the differential suite's job here is to
+/// prove the divergence is unreachable, not to reproduce it.
+const REFUSED_DIVERGENCES: &[&str] = &[
+    // interp printed `42`, native printed `()`.
+    "fn f() -> Int { 42; }\n\
+     fn main() { print(f()); }",
+    // interp printed `2`, native printed `1` (untagged `.i` read, no trap).
+    "fn g() -> Unit { }\n\
+     fn f() -> Int { g(); }\n\
+     fn main() { print(f() + 1); }",
+];
+
+#[test]
+fn fall_off_the_end_programs_are_refused_before_they_can_diverge() {
+    for src in REFUSED_DIVERGENCES {
+        let dir = scratch("refused");
+        let src_path = dir.join("main.writ");
+        std::fs::write(&src_path, src).expect("write source");
+
+        let (program, diags) = writ_cli::load_program(&src_path);
+        let mut all = diags;
+        all.extend(writ_cli::check(&program));
+        assert!(
+            all.iter().any(|d| d.code == "T0016"),
+            "a fall-off-the-end program must be a compile error, got: {all:?}\n{src}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn native_matches_interpreter_on_a_multi_module_program() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // A multi-module native build (the corpus was otherwise single-module). The
+    // names are chosen to exercise the mangling collision from #150: the linked
+    // cross-module `foo.bar` and the local `foo_bar` must stay distinct C
+    // identifiers, so this builds and agrees with the interpreter.
+    let dir = scratch("multimod");
+    std::fs::write(dir.join("foo.writ"), "export fn bar() -> Int { return 1; }")
+        .expect("write module");
+    let root = dir.join("main.writ");
+    std::fs::write(
+        &root,
+        "import foo\n\
+         fn foo_bar() -> Int { return 2; }\n\
+         fn main() { print(foo.bar()); print(foo_bar()); }",
+    )
+    .expect("write root");
+
+    let interp_out = interpret(&root);
+    let native_out = native(&dir, &root);
+    assert_eq!(
+        interp_out, native_out,
+        "multi-module program disagrees between interpreter and native"
+    );
+    assert_eq!(interp_out, "1\n2\n");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -209,6 +261,16 @@ fn a_violated_precondition_traps_in_the_native_binary() {
     let out = Command::new(&bin).output().expect("run native binary");
     assert!(!out.status.success(), "a trapped binary must exit non-zero");
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // The native trap is a machine-readable diagnostic carrying the stable code
+    // and blame, matching the interpreter's `C0001` / caller (#152).
+    assert!(
+        stderr.contains("\"code\":\"C0001\""),
+        "native code: {stderr}"
+    );
+    assert!(
+        stderr.contains("\"blame\":\"caller\""),
+        "native blame: {stderr}"
+    );
     assert!(
         stderr.contains("precondition violated (blame: caller)"),
         "native trap message: {stderr}"
@@ -217,7 +279,209 @@ fn a_violated_precondition_traps_in_the_native_binary() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// --- Trap parity, one per builtin error family (#153) ----------------------
+#[test]
+fn a_failing_program_prints_the_same_partial_output_on_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Output printed before a runtime error is preserved on both engines, and
+    // the error is a machine-readable diagnostic on stderr carrying the same
+    // code — the "errors are an API" contract (#152).
+    let dir = scratch("partial");
+    let src_path = dir.join("main.writ");
+    std::fs::write(
+        &src_path,
+        "fn main() { print(1); print(2); print(10 / 0); }",
+    )
+    .expect("write source");
+    let (program, _) = writ_cli::load_program(&src_path);
+
+    // Interpreter: the two prints survive the error; the error is `E1000`.
+    let (interp_out, interp_err) = writ_cli::run_collecting(&program);
+    assert_eq!(interp_out, vec!["1".to_string(), "2".to_string()]);
+    assert_eq!(interp_err.expect("interpreter should fail").code, "E1000");
+
+    // Native: identical stdout prefix; the trap carries the same code on stderr.
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(
+        !out.status.success(),
+        "a failing program must exit non-zero"
+    );
+    let native_out: Vec<String> = String::from_utf8(out.stdout)
+        .expect("utf8")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        native_out, interp_out,
+        "native and interpreter disagree on partial output"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("\"code\":\"E1000\""),
+        "native code: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn immutable_rebinding_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Rebinding a non-`mut` local is a runtime error in the interpreter; the
+    // native back end reproduces it as a trap with the same message rather than
+    // failing at the C compiler (#149).
+    let dir = scratch("immut_rebind");
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, "fn main() { let x = 1; let x = 2; print(x); }")
+        .expect("write source");
+
+    let (program, _) = writ_cli::load_program(&src_path);
+    let err = writ_cli::run(&program).expect_err("interpreter should reject the rebind");
+    assert!(
+        format!("{err:?}").contains("immutable"),
+        "interpreter message: {err:?}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build should succeed (it traps at runtime)");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(
+        !out.status.success(),
+        "an immutable rebind must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("immutable"),
+        "native trap message: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assert both engines reject `src`: the interpreter returns an error and the
+/// native binary exits non-zero, each mentioning `needle`. Text-invariant traps
+/// (NUL, non-UTF-8) can't live in `CORPUS` — that suite requires exit 0 — so
+/// they are checked here as a matched trap instead of a matched value.
+fn assert_both_trap(tag: &str, src: &str, needle: &str) {
+    let dir = scratch(tag);
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, src).expect("write source");
+
+    let (program, _) = writ_cli::load_program(&src_path);
+    let err = writ_cli::run(&program).expect_err("interpreter should trap");
+    assert!(
+        format!("{err:?}").contains(needle),
+        "interpreter message should mention {needle:?}: {err:?}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(!out.status.success(), "native binary should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(needle),
+        "native stderr should mention {needle:?}: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn code_char_zero_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A (#146): U+0000 is the one scalar that encodes to a NUL byte, so a
+    // NUL-terminated C string could not carry it. Both engines trap identically
+    // rather than diverge (interp `1` vs native `0` on `text_len`).
+    assert_both_trap(
+        "nul_code_char",
+        "fn main() { print(text_len(code_char(0))); }",
+        "NUL (U+0000) is not allowed in text",
+    );
+}
+
+#[test]
+fn read_file_of_non_utf8_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family B (#146): invalid UTF-8 content. The interpreter's `read_to_string`
+    // rejects it; the native `w_read_file` now validates too, so both trap
+    // instead of native silently printing a lenient byte count.
+    let dir = scratch("read_non_utf8");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0xff, 0xfe, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_non_utf8_run", &src, "valid UTF-8");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_file_containing_a_nul_traps_in_both_engines() {
+    if !have_cc() {
+        eprintln!("skipping differential test: no C compiler found");
+        return;
+    }
+    // Family A via `read_file`: a NUL byte is valid UTF-8 (U+0000) but violates
+    // the no-NUL text invariant, so both engines reject it rather than diverge
+    // (interp a 5-char string vs native a NUL-truncated one).
+    let dir = scratch("read_nul");
+    let data = dir.join("data.bin");
+    std::fs::write(&data, [b'a', b'b', 0x00, b'c', b'd']).expect("write data");
+    let src = format!(
+        "fn main(root: Cap<Root>) uses {{ Read }} {{\n\
+            print(text_len(read_file(grant<Read>(root), \"{}\")));\n\
+         }}",
+        data.display()
+    );
+    assert_both_trap("read_nul_run", &src, "not valid");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Assert both engines **fail** on `src` with a shared message keyword: the
+/// interpreter returns an error and the native binary exits non-zero, each
+/// mentioning `keyword`. This is the per-builtin-family trap-parity check the
+/// success-only corpus cannot express (#153).
+fn assert_trap_parity(tag: &str, src: &str, keyword: &str) {
+    let dir = scratch(tag);
+    let src_path = dir.join("main.writ");
+    std::fs::write(&src_path, src).expect("write source");
+    let (program, _) = writ_cli::load_program(&src_path);
+
+    let err = writ_cli::run(&program).expect_err("interpreter should trap");
+    assert!(
+        err.to_string().contains(keyword),
+        "interpreter message should mention {keyword:?}: {err}"
+    );
+
+    let bin = dir.join("prog");
+    writ_cli::build(&program, &bin).expect("native build");
+    let out = Command::new(&bin).output().expect("run native binary");
+    assert!(!out.status.success(), "native binary should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(keyword),
+        "native stderr should mention {keyword:?}: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 
 #[test]
 fn arithmetic_trap_parity() {

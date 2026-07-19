@@ -268,6 +268,16 @@ impl<'m> Interpreter<'m> {
             "code_char" => {
                 arity(1)?;
                 let i = int(&args[0])?;
+                // Writ text is valid UTF-8 with **no embedded NUL** (U+0000 is
+                // the only scalar whose UTF-8 encoding is a NUL byte). The C
+                // back end represents text as a NUL-terminated string, so
+                // allowing U+0000 would diverge; both engines trap instead.
+                if i == 0 {
+                    return Err(RuntimeError::new(
+                        span,
+                        "`code_char`: NUL (U+0000) is not allowed in text",
+                    ));
+                }
                 let c = u32::try_from(i)
                     .ok()
                     .and_then(char::from_u32)
@@ -307,8 +317,18 @@ impl<'m> Interpreter<'m> {
                     ));
                 }
                 let path = text(&args[1])?;
+                // `read_to_string` already rejects non-UTF-8 content. Also reject
+                // an embedded NUL: it is valid UTF-8 (U+0000) but the C back
+                // end's NUL-terminated text cannot represent it, so the two
+                // engines must agree by trapping here too.
                 let contents = std::fs::read_to_string(&path)
                     .map_err(|e| RuntimeError::new(span, format!("read_file `{path}`: {e}")))?;
+                if contents.contains('\0') {
+                    return Err(RuntimeError::new(
+                        span,
+                        format!("read_file `{path}`: file is not valid text (contains a NUL byte)"),
+                    ));
+                }
                 Ok(Value::Text(contents))
             }
             "write_file" => {
