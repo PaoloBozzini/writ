@@ -47,6 +47,7 @@ are emitted as a JSON array (`writ check` / `writ run` print exactly this).
 | `R####` | module resolver |
 | `T0008`/`T0009` | capability narrowing (`grant`) |
 | `C####` | contract violations (runtime; carry `blame`) |
+| `V####` | SMT verifier (`writ verify`; warnings only) — `V0001` out of the SMT fragment, `V0002` counterexample found, `V0003` solver undecided |
 | `D####` | driver (file loading) |
 | `E1000` | generic runtime error |
 
