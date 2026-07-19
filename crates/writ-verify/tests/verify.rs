@@ -182,3 +182,56 @@ fn z3_proves_a_true_postcondition_and_refutes_a_false_one() {
     assert_eq!(diags.len(), 1, "a false postcondition is caught");
     assert_eq!(diags[0].code, "V0002");
 }
+
+// --- Single availability probe (#157) --------------------------------------
+
+/// A solver that counts how many times its availability was probed.
+struct CountingSolver {
+    available: bool,
+    probes: std::cell::Cell<usize>,
+}
+
+impl Solver for CountingSolver {
+    fn available(&self) -> bool {
+        self.probes.set(self.probes.get() + 1);
+        self.available
+    }
+    fn solve(&self, _script: &str) -> Answer {
+        Answer::Unsat
+    }
+}
+
+#[test]
+fn verify_reporting_availability_probes_the_solver_once() {
+    let m = parse(
+        "fn max(a: Int, b: Int) -> Int ensures result >= a { if a > b { return a; } return b; }",
+    );
+    let solver = CountingSolver {
+        available: true,
+        probes: std::cell::Cell::new(0),
+    };
+    let (diags, available) = writ_verify::verify_reporting_availability(&m, &solver);
+    assert!(available);
+    assert!(diags.is_empty());
+    assert_eq!(
+        solver.probes.get(),
+        1,
+        "availability must be probed exactly once"
+    );
+}
+
+#[test]
+fn verify_reporting_availability_skips_when_unavailable() {
+    let m = parse("fn f(n: Int) -> Int ensures result > n { return n; }");
+    let solver = CountingSolver {
+        available: false,
+        probes: std::cell::Cell::new(0),
+    };
+    let (diags, available) = writ_verify::verify_reporting_availability(&m, &solver);
+    assert!(!available);
+    assert!(
+        diags.is_empty(),
+        "no verification when the solver is unavailable"
+    );
+    assert_eq!(solver.probes.get(), 1);
+}
