@@ -18,7 +18,9 @@ use writ_ast::{Block, Diagnostic, Expr, Item, Module, Stmt, TypeExpr};
 
 /// The type-head marking untrusted data.
 const TAINTED: &str = "Tainted";
-/// The built-in that removes taint: `sanitize(Tainted<T>) -> T`.
+/// The validator-based taint boundary:
+/// `sanitize(Tainted<T>, fn(T) -> Bool) -> Option<T>` — the validator certifies
+/// the value, yielding `Some(value)` on success (trusted `T`) or `None`.
 const SANITIZE: &str = "sanitize";
 /// Effects whose declaration marks a function as a sink.
 const SINK_EFFECTS: [&str; 2] = ["Query", "Shell"];
