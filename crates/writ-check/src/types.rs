@@ -794,11 +794,13 @@ impl<'m> Checker<'m> {
     }
 
     /// Whether a variant pattern owned by `owner` may match a scrutinee of type
-    /// `scrutinee_ty`. A pattern from a *different* sum type is a compile error
-    /// (naming both types); it never contributes to coverage and its payload
-    /// bindings are not instantiated from the wrong type. When the scrutinee is
-    /// not a known sum type (already an error, or `Infer`), no second diagnostic
-    /// is raised.
+    /// `scrutinee_ty`. A pattern whose owner is not the scrutinee's type — a
+    /// *different* sum type, or a **primitive** (`Int`, `Bool`, `Text`, `Unit`)
+    /// or other concrete type a variant can never inhabit — is a compile error
+    /// (`T0012`, naming both types); it never contributes to coverage and its
+    /// payload bindings are not instantiated from the wrong type. Only an
+    /// already-erroneous (`Error`) or undetermined (`Infer`) scrutinee is left
+    /// alone, so a single earlier mistake does not cascade.
     fn variant_matches_scrutinee(
         &mut self,
         owner: &str,
@@ -807,22 +809,24 @@ impl<'m> Checker<'m> {
         span: Span,
     ) -> bool {
         match scrutinee_ty {
-            Type::Named { name, .. } if self.sum_variants.contains_key(name.as_str()) => {
-                if name == owner {
-                    true
-                } else {
-                    self.error(
-                        "T0012",
-                        span,
-                        format!(
-                            "pattern `{pattern_name}` belongs to type `{owner}`, but the matched value has type `{name}`"
-                        ),
-                    );
-                    false
-                }
+            // `owner` is by construction a sum type, so a scrutinee named the
+            // same is that sum type — the pattern belongs here.
+            Type::Named { name, .. } if name == owner => true,
+            // Don't pile a second error onto an already-broken or undetermined
+            // scrutinee.
+            Type::Error | Type::Infer => true,
+            // Any other concrete type — a different sum type, a primitive, a
+            // capability, or a function — cannot hold this variant.
+            other => {
+                self.error(
+                    "T0012",
+                    span,
+                    format!(
+                        "pattern `{pattern_name}` belongs to type `{owner}`, but the matched value has type `{other}`"
+                    ),
+                );
+                false
             }
-            // Not a known sum type: don't pile a second error onto the scrutinee.
-            _ => true,
         }
     }
 

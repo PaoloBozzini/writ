@@ -690,3 +690,56 @@ fn a_unit_function_that_falls_off_is_fine() {
     // An explicit `-> Unit` (and the defaulted case) may fall off the end.
     assert_ok("fn f() -> Unit { let x = 1; }\nfn main() {}");
 }
+
+// --- Variant pattern against a non-sum scrutinee (#151) --------------------
+
+#[test]
+fn a_variant_pattern_against_an_int_scrutinee_is_refused() {
+    // `Some(..)` can never match an `Int`; it is a dead arm, not a valid match.
+    let cs = codes(
+        "type Opt = Some(Int) | None\n\
+         fn f(n: Int) -> Int { return match n { Some(x) => x, _ => 0 }; }",
+    );
+    assert!(
+        cs.contains(&"T0012".to_string()),
+        "expected T0012, got {cs:?}"
+    );
+}
+
+#[test]
+fn a_variant_pattern_against_a_bool_scrutinee_is_refused() {
+    let cs = codes(
+        "type Opt = Some(Int) | None\n\
+         fn f(b: Bool) -> Int { return match b { Some(x) => x, _ => 0 }; }",
+    );
+    assert!(
+        cs.contains(&"T0012".to_string()),
+        "expected T0012, got {cs:?}"
+    );
+}
+
+#[test]
+fn a_nullary_variant_pattern_against_an_int_scrutinee_is_refused() {
+    let cs = codes(
+        "type Opt = Some(Int) | None\n\
+         fn f(n: Int) -> Int { return match n { None => 1, _ => 0 }; }",
+    );
+    assert!(
+        cs.contains(&"T0012".to_string()),
+        "expected T0012, got {cs:?}"
+    );
+}
+
+#[test]
+fn the_variant_on_primitive_diagnostic_names_both_types() {
+    let parsed = writ_parser::parse(
+        "type Opt = Some(Int) | None\n\
+         fn f(n: Int) -> Int { return match n { Some(x) => x, _ => 0 }; }",
+    );
+    let d = writ_check::check_types(&parsed.module)
+        .into_iter()
+        .find(|d| d.code == "T0012")
+        .expect("a T0012 diagnostic");
+    assert!(d.message.contains("`Opt`"), "{}", d.message);
+    assert!(d.message.contains("`Int`"), "{}", d.message);
+}
