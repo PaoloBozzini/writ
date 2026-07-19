@@ -117,3 +117,43 @@ fn reaching_the_filesystem_without_the_capability_is_refused() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn writing_a_file_without_the_write_capability_is_refused() {
+    // A sandboxed `main` (no capability parameter) reaches for `write_file`:
+    // the honesty check (no `uses { Write }`) and the authority check (holds no
+    // `Cap<Write>`) both fire — the write mirror of the read refusal.
+    let dir = scratch("write_uncapped");
+    let src = write_program(
+        &dir,
+        "fn main() { write_file(\"/tmp/writ_should_not_exist\", \"data\"); }",
+    );
+    let codes = check_codes(&src);
+    assert!(
+        codes.contains(&"E0101".to_string()) && codes.contains(&"E0301".to_string()),
+        "write honesty + authority (E0101 + E0301): {codes:?}"
+    );
+    // Fails closed at runtime too, touching nothing.
+    let (program, _) = writ_cli::load_program(&src);
+    assert!(writ_cli::run(&program).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_io_builtin_called_with_a_wrong_authority_capability_is_refused() {
+    // `read_file` needs `Cap<Read>`, but here it is handed `grant<Write>(root)`
+    // — a real capability of the wrong authority. The type checker refuses the
+    // mismatched capability argument (T0001): narrowing to `Write` cannot
+    // satisfy a `Read` effect site.
+    let dir = scratch("wrong_authority");
+    let src = write_program(
+        &dir,
+        "fn reader(root: Cap<Root>) -> Text uses { Read } { return read_file(grant<Write>(root), \"x\"); }\nfn main() {}",
+    );
+    let codes = check_codes(&src);
+    assert!(
+        codes.contains(&"T0001".to_string()),
+        "wrong-authority capability argument (T0001): {codes:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

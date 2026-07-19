@@ -36,11 +36,33 @@ fn is_cap(ty: &TypeExpr) -> bool {
     ty.name == CAP
 }
 
+/// Whether a type **contains** a capability anywhere in its structure — the type
+/// itself, or a type argument (through sum payloads, e.g. `Option<Cap<Write>>`).
+/// A value of such a type carries authority out of the function, so it is an
+/// escape for the second-class rules just as a bare `Cap<..>` is.
+fn type_contains_cap(ty: &TypeExpr) -> bool {
+    is_cap(ty) || ty.args.iter().any(type_contains_cap)
+}
+
 /// Check the capability rules over a module. Empty result means every
 /// capability is parameter-only and never escapes.
 #[must_use]
 pub fn check_capabilities(module: &Module) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+
+    // Sum-type constructor names — a constructor call carries the capability-ness
+    // of its arguments into the value it builds, so `Some(cap)` is a capability
+    // expression for the escape rules.
+    let ctors: HashSet<&str> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(decl) => Some(decl.variants.iter().map(|v| v.name.as_str())),
+            Item::Function(_) => None,
+        })
+        .flatten()
+        .collect();
+
     for item in &module.items {
         let Item::Function(f) = item else {
             continue;
@@ -56,9 +78,10 @@ pub fn check_capabilities(module: &Module) -> Vec<Diagnostic> {
             .map(|p| p.name.as_str())
             .collect();
 
-        // A capability must not escape upward via the return type.
+        // A capability must not escape upward via the return type — not even
+        // wrapped inside another type (e.g. `Option<Cap<Write>>`).
         if let Some(rt) = &sig.return_type {
-            if is_cap(rt) {
+            if type_contains_cap(rt) {
                 diagnostics.push(Diagnostic::error(
                     "E0201",
                     rt.span,
@@ -67,18 +90,28 @@ pub fn check_capabilities(module: &Module) -> Vec<Diagnostic> {
             }
         }
 
-        check_block(&f.body, &cap_params, &mut diagnostics);
+        check_block(&f.body, &cap_params, &ctors, &mut diagnostics);
     }
     diagnostics
 }
 
-fn check_block(block: &Block, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>) {
+fn check_block(
+    block: &Block,
+    cap_params: &HashSet<&str>,
+    ctors: &HashSet<&str>,
+    out: &mut Vec<Diagnostic>,
+) {
     for stmt in &block.stmts {
-        check_stmt(stmt, cap_params, out);
+        check_stmt(stmt, cap_params, ctors, out);
     }
 }
 
-fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>) {
+fn check_stmt(
+    stmt: &Stmt,
+    cap_params: &HashSet<&str>,
+    ctors: &HashSet<&str>,
+    out: &mut Vec<Diagnostic>,
+) {
     match stmt {
         Stmt::Let {
             name,
@@ -91,8 +124,8 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
             // or by binding a capability parameter. Since a capability can only
             // originate from a parameter and this rule forbids re-binding one,
             // no local ever holds a capability.
-            let annotated_cap = ty.as_ref().is_some_and(is_cap);
-            let binds_cap = is_capability_expr(value, cap_params);
+            let annotated_cap = ty.as_ref().is_some_and(type_contains_cap);
+            let binds_cap = is_capability_expr(value, cap_params, ctors);
             if annotated_cap || binds_cap {
                 out.push(Diagnostic::error(
                     "E0202",
@@ -107,7 +140,7 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
             value: Some(expr),
             span,
         } => {
-            if is_capability_expr(expr, cap_params) {
+            if is_capability_expr(expr, cap_params, ctors) {
                 out.push(Diagnostic::error(
                     "E0201",
                     *span,
@@ -123,26 +156,35 @@ fn check_stmt(stmt: &Stmt, cap_params: &HashSet<&str>, out: &mut Vec<Diagnostic>
             else_block,
             ..
         } => {
-            check_block(then_block, cap_params, out);
+            check_block(then_block, cap_params, ctors, out);
             if let Some(else_block) = else_block {
-                check_block(else_block, cap_params, out);
+                check_block(else_block, cap_params, ctors, out);
             }
         }
     }
 }
 
-/// Whether `expr` evaluates to a capability, checked **structurally** so a
-/// compound expression cannot launder one. A capability value arises only from a
-/// capability parameter or a `grant<A>(..)` call; a `match` yields one if any arm
-/// it could pick does. (Second-class rules mean no user function can return a
-/// capability, so an ordinary call is never capability-typed.)
-fn is_capability_expr(expr: &Expr, cap_params: &HashSet<&str>) -> bool {
+/// Whether `expr` evaluates to a value that **contains** a capability, checked
+/// **structurally** so a compound expression cannot launder one. A capability
+/// value arises only from a capability parameter or a `grant<A>(..)` call, and a
+/// sum constructor (`Some(cap)`) carries one inside the value it builds. A
+/// `match` yields one if any arm it could pick does. (Second-class rules — with
+/// the structural return-type check above — mean no user function can return a
+/// capability-containing value, so an ordinary call is never capability-typed.)
+fn is_capability_expr(expr: &Expr, cap_params: &HashSet<&str>, ctors: &HashSet<&str>) -> bool {
     match expr {
         Expr::Identifier { name, .. } => cap_params.contains(name.as_str()),
-        Expr::Call { callee, .. } => {
-            matches!(callee.as_ref(), Expr::Identifier { name, .. } if name == GRANT)
-        }
-        Expr::Match { arms, .. } => arms.iter().any(|a| is_capability_expr(&a.body, cap_params)),
+        Expr::Call { callee, args, .. } => match callee.as_ref() {
+            Expr::Identifier { name, .. } if name == GRANT => true,
+            // A constructor preserves the capability-ness of its payload.
+            Expr::Identifier { name, .. } if ctors.contains(name.as_str()) => args
+                .iter()
+                .any(|a| is_capability_expr(a, cap_params, ctors)),
+            _ => false,
+        },
+        Expr::Match { arms, .. } => arms
+            .iter()
+            .any(|a| is_capability_expr(&a.body, cap_params, ctors)),
         _ => false,
     }
 }
