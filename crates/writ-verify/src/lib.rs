@@ -124,6 +124,29 @@ pub fn verify(module: &Module, solver: &dyn Solver) -> Vec<Diagnostic> {
     if !solver.available() {
         return Vec::new();
     }
+    verify_checked(module, solver)
+}
+
+/// Verify, and report whether the solver was available — probing availability
+/// **exactly once**. Prefer this over pairing a separate [`Solver::available`]
+/// call with [`verify`] (which probes again): a driver processing a program
+/// should not spawn one `z3 --version` per module. Returns `(warnings,
+/// available)`; when unavailable the warnings are empty.
+#[must_use]
+pub fn verify_reporting_availability(
+    module: &Module,
+    solver: &dyn Solver,
+) -> (Vec<Diagnostic>, bool) {
+    if !solver.available() {
+        return (Vec::new(), false);
+    }
+    (verify_checked(module, solver), true)
+}
+
+/// The verification core, run only once the solver is known to be available.
+/// Split out so the availability probe happens in exactly one place per entry
+/// point.
+fn verify_checked(module: &Module, solver: &dyn Solver) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for item in &module.items {
         let Item::Function(f) = item else { continue };

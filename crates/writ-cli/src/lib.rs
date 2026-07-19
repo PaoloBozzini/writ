@@ -190,15 +190,18 @@ pub fn run_collecting(program: &Program) -> (Vec<String>, Option<RuntimeError>) 
 /// is never part of `check` / `run` / `build`, so it cannot block a program the
 /// runtime path accepts. Returns `(diagnostics, solver_available)`; when no
 /// solver is installed, the diagnostics are empty and the flag is `false`.
+///
+/// Verification runs over the **linked** module — the same artifact `check`,
+/// `run`, and `build` consume (issue #157) — not the raw per-module ASTs, so a
+/// cross-module contract sees the same program the other passes do. Solver
+/// availability is probed **once** per invocation.
 #[must_use]
 pub fn verify(program: &Program) -> (Vec<Diagnostic>, bool) {
     let solver = writ_verify::Z3Cli;
-    let available = writ_verify::Solver::available(&solver);
-    let mut diagnostics = Vec::new();
-    for module in program.modules.values() {
-        diagnostics.extend(writ_verify::verify(module, &solver));
-    }
-    (diagnostics, available)
+    // Verify the linked artifact (not lowered: `requires` / `ensures` still live
+    // on signatures pre-lowering, which is what the verifier reads).
+    let linked = writ_lower::link(&program.modules, &program.root);
+    writ_verify::verify_reporting_availability(&linked, &solver)
 }
 
 /// Why a native build failed: a construct the back end cannot emit, an I/O
