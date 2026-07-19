@@ -31,6 +31,9 @@ const CORPUS: &[&str] = &[
     // A precondition that is satisfied.
     "fn half(n: Int) -> Int requires n > 0 { return n / 2; }\n\
      fn main() { print(half(8)); }",
+    // `result` is an ordinary name outside `ensures` — both engines agree (#148).
+    "fn f(n: Int) -> Int { let result = n + 1; return result; }\n\
+     fn main() { print(f(41)); }",
     // Sum types, generic constructors, and `match` (payloads, nullary, catch-all).
     "type Option<T> = Some(T) | None\n\
      fn unwrap_or(o: Option<Int>, d: Int) -> Int { return match o { Some(x) => x, None => d }; }\n\

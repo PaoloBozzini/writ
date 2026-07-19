@@ -33,6 +33,10 @@ const SANITIZE: &str = "sanitize";
 /// The type-head marking untrusted data.
 const TAINTED: &str = "Tainted";
 
+/// The name contract lowering binds to a function's returned value for its
+/// `ensures` predicate — reserved from user bindings in an `ensures` function.
+const RESULT: &str = "result";
+
 /// Type-check a module, returning all type diagnostics in source order. An empty
 /// result means the module is well-typed.
 #[must_use]
@@ -288,7 +292,59 @@ impl<'m> Checker<'m> {
             self.bind(param.name.clone(), Type::resolve(&param.ty));
         }
         self.check_contracts(sig);
+        self.check_result_reserved(sig, body);
         self.check_block(body);
+    }
+
+    /// In a function that declares `ensures`, `result` is reserved: contract
+    /// lowering injects `let result = <return expr>` on every exit to bind the
+    /// returned value the `ensures` predicate reads. A user parameter or local
+    /// named `result` would collide with that injection and break the function
+    /// differently per engine (the interpreter refuses the rebind; the C back
+    /// end emits a redefinition), on checker-clean code. Refuse the collision
+    /// statically (`T0018`) at the offending binding — matching the spec's
+    /// documented `result` keyword.
+    fn check_result_reserved(&mut self, sig: &Signature, body: &Block) {
+        if sig.ensures.is_empty() {
+            return;
+        }
+        for param in &sig.params {
+            if param.name == RESULT {
+                self.error(
+                    "T0018",
+                    param.span,
+                    "`result` is reserved in a function with an `ensures` clause (it names the returned value): rename this parameter",
+                );
+            }
+        }
+        self.check_no_result_binding(&body.stmts);
+    }
+
+    /// Report every `let result` in an `ensures` function's body, recursing into
+    /// `if` branches (the only other place a binding can appear).
+    fn check_no_result_binding(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { name, span, .. } if name == RESULT => {
+                    self.error(
+                        "T0018",
+                        *span,
+                        "`result` is reserved in a function with an `ensures` clause (it names the returned value): rename this local",
+                    );
+                }
+                Stmt::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    self.check_no_result_binding(&then_block.stmts);
+                    if let Some(else_block) = else_block {
+                        self.check_no_result_binding(&else_block.stmts);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Type-check the signature's contract predicates. A `requires` sees the

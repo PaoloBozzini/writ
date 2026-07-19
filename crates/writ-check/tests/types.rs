@@ -564,3 +564,41 @@ fn sanitize_needs_a_validator_argument() {
     let cs = codes("fn f(input: Tainted<Text>) { let r = sanitize(input); }");
     assert_eq!(cs, vec!["T0004"]);
 }
+
+// --- `result` reserved in `ensures` functions (#148) -----------------------
+
+#[test]
+fn binding_result_in_an_ensures_function_is_refused() {
+    // Contract lowering injects `let result = <return expr>`, so a user local
+    // named `result` collides and breaks the function per-engine.
+    let cs = codes(
+        "fn f(n: Int) -> Int ensures result > 0 {\n\
+            let result = n + 1;\n\
+            return result;\n\
+         }",
+    );
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn a_result_parameter_in_an_ensures_function_is_refused() {
+    let cs = codes("fn f(result: Int) -> Int ensures result > 0 { return result; }");
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn binding_result_in_an_if_branch_of_an_ensures_function_is_refused() {
+    let cs = codes(
+        "fn f(n: Int) -> Int ensures result > 0 {\n\
+            if n > 0 { let result = n; return result; }\n\
+            return 1;\n\
+         }",
+    );
+    assert_eq!(cs, vec!["T0018"]);
+}
+
+#[test]
+fn binding_result_without_an_ensures_clause_is_fine() {
+    // No `ensures`, no injected binding — `result` is an ordinary name.
+    assert_ok("fn f(n: Int) -> Int { let result = n + 1; return result; }");
+}
